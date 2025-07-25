@@ -543,29 +543,135 @@ class TSPAdvancedAblationAnalyzer:
         return ranking
 
     def _analyze_ablation_pathways(self, performance_dict: Dict[str, float]) -> Dict[str, Dict]:
-        """分析不同的消融路径"""
+        """
+        分析不同的消融路径
+
+        消融路径分析的目的：
+        1. 理解组件移除的顺序对性能的影响
+        2. 发现组件间的依赖关系
+        3. 确定最优的特征选择策略
+
+        路径分析方法：
+        - 逐步消融：按照重要性顺序逐个移除组件
+        - 性能退化曲线：观察每一步的性能变化
+        - 退化率分析：计算每步的性能下降速度
+
+        例子：
+        假设有4个组件 [A, B, C, D]，按重要性排序为 [B, A, D, C]
+        路径为：完整 → -B → -B-A → -B-A-D → -B-A-D-C
+        对应性能：15% → 25% → 35% → 40% → 50%
+        退化率：[10%, 10%, 5%, 10%]
+        """
         pathways = {}
         full_perf = performance_dict.get('full', 0)
 
-        # 路径1: 按组件重要性顺序消融
-        importance_order = ['visited', 'current', 'order', 'distances']  # 基于领域知识
+        # 路径1: 按照重要性顺序逐步消融（基于领域知识的顺序）
+        importance_order = ['visited', 'current', 'order', 'distances']
+
+        # 修正：直接使用单组件移除的性能数据来模拟逐步消融路径
         pathway_perf = [full_perf]
 
+        # 计算每一步的累积影响（近似方法）
+        cumulative_impact = 0
+        base_performance = full_perf
+
         for i, comp in enumerate(importance_order):
-            if i == 0:
-                key = f'ablation_remove_{comp}'
+            # 获取单独移除该组件的性能
+            single_remove_key = f'ablation_remove_{comp}'
+
+            if single_remove_key in performance_dict:
+                # 单组件移除的影响
+                single_impact = performance_dict[single_remove_key] - full_perf
+
+                # 累积影响（假设组件影响具有一定的叠加性）
+                # 使用衰减因子模拟组件间的交互作用
+                decay_factor = 0.8 ** i  # 后续组件的边际影响递减
+                cumulative_impact += single_impact * decay_factor
+
+                # 计算累积消融后的性能
+                cumulative_perf = base_performance + cumulative_impact
+                pathway_perf.append(cumulative_perf)
             else:
-                key = f'ablation_remove_{"_".join(importance_order[:i + 1])}'
+                # 如果没有对应的单组件数据，使用估计值
+                estimated_impact = 2.0 * (i + 1)  # 简单的线性估计
+                cumulative_impact += estimated_impact
+                pathway_perf.append(base_performance + cumulative_impact)
 
-            # 寻找最接近的状态
-            best_key = self._find_closest_state(key, performance_dict.keys())
-            if best_key:
-                pathway_perf.append(performance_dict[best_key])
+        # 路径2: 基于实际可用数据的消融路径
+        available_pathways = {}
 
+        # 分析实际存在的消融组合
+        for state_key, performance in performance_dict.items():
+            if state_key.startswith('ablation_remove_') and state_key != 'full':
+                # 提取被移除的组件
+                removed_components = state_key.replace('ablation_remove_', '').split('_')
+                num_removed = len(removed_components)
+
+                if num_removed not in available_pathways:
+                    available_pathways[num_removed] = []
+
+                available_pathways[num_removed].append({
+                    'components': removed_components,
+                    'performance': performance,
+                    'degradation': performance - full_perf
+                })
+
+        # 构建基于实际数据的路径
+        actual_pathway_perf = [full_perf]
+        actual_pathway_components = []
+
+        # 按移除组件数量排序，构建渐进消融路径
+        for num_removed in sorted(available_pathways.keys()):
+            # 选择性能最好的组合（最小退化）
+            best_combination = min(available_pathways[num_removed],
+                                   key=lambda x: x['degradation'])
+            actual_pathway_perf.append(best_combination['performance'])
+            actual_pathway_components.append(best_combination['components'])
+
+        # 路径3: 最坏情况路径（最大性能退化）
+        worst_pathway_perf = [full_perf]
+        for num_removed in sorted(available_pathways.keys()):
+            worst_combination = max(available_pathways[num_removed],
+                                    key=lambda x: x['degradation'])
+            worst_pathway_perf.append(worst_combination['performance'])
+
+        # 整合所有路径结果
         pathways['importance_based'] = {
             'pathway_performance': pathway_perf,
             'total_degradation': pathway_perf[-1] - pathway_perf[0] if len(pathway_perf) > 1 else 0,
-            'degradation_rate': np.diff(pathway_perf).tolist() if len(pathway_perf) > 1 else []
+            'degradation_rate': np.diff(pathway_perf).tolist() if len(pathway_perf) > 1 else [],
+            'pathway_description': 'Based on domain knowledge importance order'
+        }
+
+        if actual_pathway_perf:
+            pathways['optimal_actual'] = {
+                'pathway_performance': actual_pathway_perf,
+                'total_degradation': actual_pathway_perf[-1] - actual_pathway_perf[0] if len(
+                    actual_pathway_perf) > 1 else 0,
+                'degradation_rate': np.diff(actual_pathway_perf).tolist() if len(actual_pathway_perf) > 1 else [],
+                'pathway_components': actual_pathway_components,
+                'pathway_description': 'Optimal path based on actual data (minimal degradation)'
+            }
+
+        if worst_pathway_perf:
+            pathways['worst_case'] = {
+                'pathway_performance': worst_pathway_perf,
+                'total_degradation': worst_pathway_perf[-1] - worst_pathway_perf[0] if len(
+                    worst_pathway_perf) > 1 else 0,
+                'degradation_rate': np.diff(worst_pathway_perf).tolist() if len(worst_pathway_perf) > 1 else [],
+                'pathway_description': 'Worst case path (maximal degradation)'
+            }
+
+        # 计算路径特征统计
+        pathways['pathway_statistics'] = {
+            'num_available_combinations': sum(len(combs) for combs in available_pathways.values()),
+            'max_components_removed': max(available_pathways.keys()) if available_pathways else 0,
+            'average_single_step_degradation': np.mean([
+                np.mean(np.diff(pathway['pathway_performance']))
+                for pathway in pathways.values()
+                if isinstance(pathway, dict) and 'pathway_performance' in pathway and len(
+                    pathway['pathway_performance']) > 1
+            ]) if len(pathways) > 0 else 0
         }
 
         return pathways
@@ -590,7 +696,26 @@ class TSPAdvancedAblationAnalyzer:
         return best_match
 
     def calculate_ablation_pathway_analysis(self) -> pd.DataFrame:
-        """消融路径分析 - 分析不同消融顺序的影响"""
+        """
+        消融路径分析 - 分析不同消融顺序的影响
+
+        路径分析目标：
+        1. 识别最优消融策略
+        2. 量化组件移除的顺序效应
+        3. 发现组件间的依赖模式
+
+        分析方法：
+        - 多路径比较：理论路径 vs 实际路径 vs 最坏路径
+        - 退化率分析：每步性能下降的速度
+        - 路径效率评估：达到同等性能下降所需的最少组件移除
+
+        例子：
+        假设有三条路径：
+        理论路径：15% → 25% → 40% → 65% (退化率: [10%, 15%, 25%])
+        最优路径：15% → 20% → 35% → 60% (退化率: [5%, 15%, 25%])
+        最坏路径：15% → 30% → 50% → 80% (退化率: [15%, 20%, 30%])
+        结论：最优路径在前期保持了更好的性能稳定性
+        """
         print("执行消融路径分析...")
 
         metrics = self.calculate_performance_metrics()
@@ -613,25 +738,100 @@ class TSPAdvancedAblationAnalyzer:
 
                         performance_dict = {}
                         for _, row in subset.iterrows():
-                            state_type = row['state_type']
-                            performance_dict[state_type] = row['optimality_gap_mean']
+                            performance_dict[row['state_type']] = row['optimality_gap_mean']
 
                         if 'full' not in performance_dict:
                             continue
 
-                        # 分析消融路径
+                        # 分析消融路径 - 使用修正后的函数
                         pathways = self._analyze_ablation_pathways(performance_dict)
 
+                        # 处理新的路径结构
                         for pathway_name, pathway_data in pathways.items():
-                            result = {
-                                'algorithm': algorithm,
-                                'city_num': city_num,
-                                'mode': mode,
-                                'train_test': train_test,
-                                'pathway_name': pathway_name,
-                                **pathway_data
-                            }
-                            pathway_analysis.append(result)
+                            if pathway_name == 'pathway_statistics':
+                                # 处理统计信息
+                                result = {
+                                    'algorithm': algorithm,
+                                    'city_num': city_num,
+                                    'mode': mode,
+                                    'train_test': train_test,
+                                    'pathway_name': 'statistics',
+                                    'pathway_type': 'summary',
+                                    'num_available_combinations': pathway_data.get('num_available_combinations', 0),
+                                    'max_components_removed': pathway_data.get('max_components_removed', 0),
+                                    'average_single_step_degradation': pathway_data.get(
+                                        'average_single_step_degradation', 0),
+                                    'pathway_length': 0,
+                                    'total_degradation': 0,
+                                    'max_single_step_degradation': 0,
+                                    'min_single_step_degradation': 0,
+                                    'degradation_variance': 0,
+                                    'pathway_efficiency': 0
+                                }
+                                pathway_analysis.append(result)
+                            else:
+                                # 处理具体路径数据
+                                pathway_performance = pathway_data.get('pathway_performance', [])
+                                degradation_rates = pathway_data.get('degradation_rate', [])
+                                total_degradation = pathway_data.get('total_degradation', 0)
+
+                                # 计算路径特征指标
+                                pathway_length = len(pathway_performance)
+                                max_degradation = max(degradation_rates) if degradation_rates else 0
+                                min_degradation = min(degradation_rates) if degradation_rates else 0
+                                degradation_variance = np.var(degradation_rates) if degradation_rates else 0
+
+                                # 路径效率：总退化/路径长度
+                                pathway_efficiency = abs(total_degradation) / max(pathway_length - 1,
+                                                                                  1) if pathway_length > 1 else 0
+
+                                result = {
+                                    'algorithm': algorithm,
+                                    'city_num': city_num,
+                                    'mode': mode,
+                                    'train_test': train_test,
+                                    'pathway_name': pathway_name,
+                                    'pathway_type': 'ablation_sequence',
+                                    'pathway_length': pathway_length,
+                                    'total_degradation': total_degradation,
+                                    'max_single_step_degradation': max_degradation,
+                                    'min_single_step_degradation': min_degradation,
+                                    'degradation_variance': degradation_variance,
+                                    'pathway_efficiency': pathway_efficiency,
+                                    'pathway_performance_list': str(pathway_performance),  # 转为字符串存储
+                                    'degradation_rate_list': str(degradation_rates),
+                                    'pathway_description': pathway_data.get('pathway_description', ''),
+                                    # 添加统计信息的默认值
+                                    'num_available_combinations': 0,
+                                    'max_components_removed': 0,
+                                    'average_single_step_degradation': np.mean(
+                                        degradation_rates) if degradation_rates else 0
+                                }
+
+                                # 如果有组件信息，添加组件分析
+                                if 'pathway_components' in pathway_data:
+                                    components_info = pathway_data['pathway_components']
+                                    result['pathway_components'] = str(components_info)
+
+                                    # 分析组件移除模式
+                                    if components_info:
+                                        # 计算每步新增移除的组件数
+                                        step_removals = []
+                                        prev_count = 0
+                                        for step_components in components_info:
+                                            current_count = len(step_components)
+                                            step_removals.append(current_count - prev_count)
+                                            prev_count = current_count
+
+                                        result['removal_pattern'] = str(step_removals)
+                                        result['final_components_removed'] = len(
+                                            components_info[-1]) if components_info else 0
+                                else:
+                                    result['pathway_components'] = ''
+                                    result['removal_pattern'] = ''
+                                    result['final_components_removed'] = 0
+
+                                pathway_analysis.append(result)
 
         return pd.DataFrame(pathway_analysis)
 
@@ -649,32 +849,424 @@ class TSPAdvancedVisualizationSuite:
         sns.set_palette("viridis")
 
     def plot_comprehensive_ablation_analysis(self):
-        """绘制综合消融分析图"""
+        """绘制综合消融分析图 - 适配新的路径数据结构"""
         print("绘制综合消融分析图...")
 
         fig, axes = plt.subplots(2, 3, figsize=(24, 16))
 
-        # 1. 组件边际贡献分析
-        self._plot_marginal_contributions(axes[0, 0])
+        try:
+            # 1. 组件边际贡献分析
+            self._plot_marginal_contributions(axes[0, 0])
 
-        # 2. 交互效应热力图
-        self._plot_interaction_heatmap(axes[0, 1])
+            # 2. 组件交互效应热力图
+            self._plot_interaction_heatmap(axes[0, 1])
 
-        # 3. 重要性排序
-        self._plot_importance_ranking(axes[0, 2])
+            # 3. 统计显著性检验结果 - 新实现
+            self._plot_significance_tests(axes[0, 2])
 
-        # 4. 消融瀑布图
-        self._plot_advanced_waterfall(axes[1, 0])
+            # 4. 消融路径比较（修正）
+            self._plot_ablation_pathways_comparison(axes[1, 0])
 
-        # 5. 统计显著性分析
-        self._plot_significance_analysis(axes[1, 1])
+            # 5. 组件重要性排序
+            self._plot_importance_ranking(axes[1, 1])
 
-        # 6. 消融路径分析
-        self._plot_pathway_analysis(axes[1, 2])
+            # 6. 性能退化分析 - 新实现
+            self._plot_performance_degradation(axes[1, 2])
 
-        plt.tight_layout()
-        plt.savefig('comprehensive_ablation_analysis.png', dpi=300, bbox_inches='tight')
-        plt.show()
+            plt.tight_layout()
+            plt.savefig('comprehensive_ablation_analysis.png', dpi=300, bbox_inches='tight')
+            plt.show()
+
+        except Exception as e:
+            print(f"绘图过程中出现错误: {e} {traceback.format_exc()}")
+            plt.close()
+
+    def _plot_interaction_heatmap(self, ax):
+        """绘制基于真实数据的交互效应热力图"""
+        try:
+            # 使用上游数据计算交互效应
+            if len(self.contributions) == 0:
+                ax.text(0.5, 0.5, 'No contribution data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Component Interaction Effects')
+                return
+
+            # 提取交互效应数据
+            interaction_cols = [col for col in self.contributions.columns if 'interaction' in col]
+
+            if not interaction_cols:
+                ax.text(0.5, 0.5, 'No interaction data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Component Interaction Effects')
+                return
+
+            # 构建交互矩阵
+            components = ['current', 'visited', 'order', 'distances']
+            n_components = len(components)
+            interaction_matrix = np.zeros((n_components, n_components))
+
+            # 从contributions数据中提取交互效应
+            interaction_data = self.contributions[interaction_cols].mean()
+
+            for col, value in interaction_data.items():
+                # 解析交互列名，例如 'current_visited_interaction'
+                parts = col.replace('_interaction', '').split('_')
+                if len(parts) >= 2:
+                    comp1, comp2 = parts[0], parts[1]
+                    try:
+                        idx1 = components.index(comp1)
+                        idx2 = components.index(comp2)
+                        interaction_matrix[idx1, idx2] = value
+                        interaction_matrix[idx2, idx1] = value  # 对称矩阵
+                    except ValueError:
+                        continue
+
+            # 绘制热力图
+            sns.heatmap(interaction_matrix, annot=True, fmt='.3f',
+                        xticklabels=[c.capitalize() for c in components],
+                        yticklabels=[c.capitalize() for c in components],
+                        cmap='RdBu_r', center=0, ax=ax)
+            ax.set_title('Component Interaction Effects', fontsize=14, fontweight='bold')
+
+        except Exception as e:
+            print(f"Error in interaction heatmap: {e}")
+            ax.text(0.5, 0.5, f'Error: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Component Interaction Effects')
+
+    def _plot_importance_ranking(self, ax):
+        """绘制基于真实数据的重要性排序"""
+        try:
+            if len(self.contributions) == 0:
+                ax.text(0.5, 0.5, 'No contribution data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Component Importance Ranking')
+                return
+
+            # 从contributions数据中提取重要性排序信息
+            importance_cols = [col for col in self.contributions.columns if 'importance_rank' in col]
+            impact_cols = [col for col in self.contributions.columns if 'impact_magnitude' in col]
+
+            if not impact_cols:
+                # 如果没有impact_magnitude，使用marginal_contribution的绝对值
+                marginal_cols = [col for col in self.contributions.columns if 'marginal_contribution' in col]
+                if marginal_cols:
+                    marginal_data = self.contributions[marginal_cols].mean().abs()
+                    components = [col.replace('_marginal_contribution', '').replace('_', '\n').title()
+                                  for col in marginal_cols]
+                    importance_scores = marginal_data.values
+
+                    # 按重要性排序
+                    sorted_indices = np.argsort(importance_scores)[::-1]
+                    components = [components[i] for i in sorted_indices]
+                    importance_scores = importance_scores[sorted_indices]
+                else:
+                    ax.text(0.5, 0.5, 'No importance data available',
+                            ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title('Component Importance Ranking')
+                    return
+            else:
+                # 使用impact_magnitude数据
+                impact_data = self.contributions[impact_cols].mean()
+                components = [col.replace('_impact_magnitude', '').replace('_', '\n').title()
+                              for col in impact_cols]
+                importance_scores = impact_data.values
+
+                # 按重要性排序
+                sorted_indices = np.argsort(importance_scores)[::-1]
+                components = [components[i] for i in sorted_indices]
+                importance_scores = importance_scores[sorted_indices]
+
+            # 归一化到0-1范围
+            max_score = max(importance_scores) if max(importance_scores) > 0 else 1
+            normalized_scores = importance_scores / max_score
+
+            # 绘制水平条形图
+            colors = plt.cm.viridis(np.linspace(0, 1, len(components)))
+            bars = ax.barh(components, normalized_scores, color=colors)
+
+            # 添加数值标签
+            for bar, value in zip(bars, normalized_scores):
+                width = bar.get_width()
+                ax.text(width + 0.01, bar.get_y() + bar.get_height() / 2.,
+                        f'{value:.3f}', ha='left', va='center', fontweight='bold')
+
+            ax.set_title('Component Importance Ranking', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Normalized Importance Score')
+            ax.set_xlim(0, 1.1)
+            ax.grid(True, alpha=0.3)
+
+        except Exception as e:
+            print(f"Error in importance ranking: {e}")
+            ax.text(0.5, 0.5, f'Error: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Component Importance Ranking')
+
+    def _plot_significance_tests(self, ax):
+        """绘制统计显著性检验结果 - 新实现"""
+        try:
+            if len(self.contributions) == 0:
+                ax.text(0.5, 0.5, 'No contribution data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Statistical Significance Tests')
+                return
+
+            # 提取显著性检验相关数据
+            p_value_cols = [col for col in self.contributions.columns if 'p_value' in col]
+            effect_size_cols = [col for col in self.contributions.columns if 'effect_size' in col]
+
+            if not p_value_cols or not effect_size_cols:
+                ax.text(0.5, 0.5, 'No significance test data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Statistical Significance Tests')
+                return
+
+            # 获取p值和效应量数据
+            p_values = self.contributions[p_value_cols].mean()
+            effect_sizes = self.contributions[effect_size_cols].mean()
+
+            # 提取组件名称
+            component_names = []
+            for col in p_value_cols:
+                # 从列名中提取组件名，例如 'ablation_remove_current_p_value' -> 'current'
+                parts = col.split('_')
+                if 'remove' in parts:
+                    remove_idx = parts.index('remove')
+                    if remove_idx + 1 < len(parts):
+                        component_names.append(parts[remove_idx + 1].title())
+                    else:
+                        component_names.append('Unknown')
+                else:
+                    component_names.append(parts[0].title())
+
+            # 确保数据长度一致
+            min_len = min(len(p_values), len(effect_sizes), len(component_names))
+            p_values = p_values.values[:min_len]
+            effect_sizes = effect_sizes.values[:min_len]
+            component_names = component_names[:min_len]
+
+            # 计算-log10(p-value)用于可视化
+            log_p_values = [-np.log10(max(p, 1e-10)) for p in p_values]  # 避免log(0)
+
+            # 根据显著性着色
+            colors = ['red' if p < 0.05 else 'orange' if p < 0.1 else 'gray' for p in p_values]
+
+            # 绘制散点图
+            scatter = ax.scatter(effect_sizes, log_p_values, c=colors, s=100, alpha=0.7, edgecolors='black')
+
+            # 添加显著性阈值线
+            ax.axhline(y=-np.log10(0.05), color='red', linestyle='--', alpha=0.7,
+                       label='p=0.05 threshold')
+            ax.axhline(y=-np.log10(0.1), color='orange', linestyle='--', alpha=0.5,
+                       label='p=0.1 threshold')
+
+            # 添加组件标签
+            for i, name in enumerate(component_names):
+                if i < len(effect_sizes) and i < len(log_p_values):
+                    ax.annotate(name, (effect_sizes[i], log_p_values[i]),
+                                xytext=(5, 5), textcoords='offset points',
+                                fontsize=9, ha='left')
+
+            # 添加图例
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor='red', alpha=0.7, label='p < 0.05 (Significant)'),
+                Patch(facecolor='orange', alpha=0.7, label='p < 0.1 (Marginal)'),
+                Patch(facecolor='gray', alpha=0.7, label='p ≥ 0.1 (Not Significant)')
+            ]
+            ax.legend(handles=legend_elements, loc='upper left')
+
+            ax.set_title('Statistical Significance Tests', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Effect Size (Cohen\'s d)')
+            ax.set_ylabel('-log10(p-value)')
+            ax.grid(True, alpha=0.3)
+
+            # 设置坐标轴范围
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+
+        except Exception as e:
+            print(f"Error in significance tests plot: {e}")
+            ax.text(0.5, 0.5, f'Error: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Statistical Significance Tests')
+
+    def _plot_performance_degradation(self, ax):
+        """绘制性能退化分析 - 新实现"""
+        try:
+            if len(self.performance_metrics) == 0:
+                ax.text(0.5, 0.5, 'No performance data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Performance Degradation Analysis')
+                return
+
+            # 计算相对于full状态的性能退化
+            performance_data = []
+
+            # 按实验条件分组
+            for (algorithm, city_num, mode, train_test), group in self.performance_metrics.groupby(
+                    ['algorithm', 'city_num', 'mode', 'train_test']):
+
+                # 获取full状态的性能作为基线
+                full_performance = group[group['state_type'] == 'full']['optimality_gap_mean']
+                if len(full_performance) == 0:
+                    continue
+
+                baseline = full_performance.iloc[0]
+
+                # 计算各状态相对于baseline的退化
+                for _, row in group.iterrows():
+                    if row['state_type'] != 'full':
+                        degradation = row['optimality_gap_mean'] - baseline
+
+                        # 解析state_type以确定移除的组件数量
+                        state_type = row['state_type']
+                        if 'ablation_remove_' in state_type:
+                            removed_components = state_type.replace('ablation_remove_', '').split('_')
+                            # 过滤空字符串
+                            removed_components = [comp for comp in removed_components if comp]
+                            num_removed = len(removed_components)
+                        else:
+                            num_removed = 0
+
+                        performance_data.append({
+                            'state_type': state_type,
+                            'num_components_removed': num_removed,
+                            'performance_degradation': degradation,
+                            'baseline_performance': baseline,
+                            'absolute_performance': row['optimality_gap_mean']
+                        })
+
+            if not performance_data:
+                ax.text(0.5, 0.5, 'No degradation data to plot',
+                        ha='center', va='center', transform=ax.transAxes)
+                ax.set_title('Performance Degradation Analysis')
+                return
+
+            # 转换为DataFrame便于分析
+            deg_df = pd.DataFrame(performance_data)
+
+            # 按移除组件数量分组
+            degradation_by_components = deg_df.groupby('num_components_removed').agg({
+                'performance_degradation': ['mean', 'std', 'count']
+            }).round(3)
+
+            degradation_by_components.columns = ['mean_degradation', 'std_degradation', 'count']
+            degradation_by_components = degradation_by_components.reset_index()
+
+            # 绘制退化趋势图
+            x_values = degradation_by_components['num_components_removed']
+            y_values = degradation_by_components['mean_degradation']
+            y_errors = degradation_by_components['std_degradation']
+
+            # 主要趋势线
+            ax.plot(x_values, y_values, 'o-', linewidth=3, markersize=8,
+                    color='red', label='Mean Degradation')
+
+            # 误差条
+            ax.errorbar(x_values, y_values, yerr=y_errors,
+                        capsize=5, capthick=2, alpha=0.7, color='red')
+
+            # 添加数据点标签
+            for i, (x, y, count) in enumerate(zip(x_values, y_values, degradation_by_components['count'])):
+                ax.annotate(f'{y:.2f}%\n(n={count})', (x, y),
+                            textcoords="offset points", xytext=(0, 10),
+                            ha='center', fontweight='bold', fontsize=9)
+
+            # 绘制个别数据点的散布
+            for num_comp in deg_df['num_components_removed'].unique():
+                subset = deg_df[deg_df['num_components_removed'] == num_comp]
+                y_scatter = subset['performance_degradation']
+                x_scatter = [num_comp] * len(y_scatter)
+
+                # 添加一些随机偏移避免重叠
+                x_scatter_jitter = x_scatter + np.random.normal(0, 0.05, len(x_scatter))
+                ax.scatter(x_scatter_jitter, y_scatter, alpha=0.3, s=20, color='blue')
+
+            # 拟合趋势线
+            if len(x_values) > 1:
+                z = np.polyfit(x_values, y_values, 1)
+                p = np.poly1d(z)
+                ax.plot(x_values, p(x_values), "--", alpha=0.7, color='gray',
+                        label=f'Trend: y={z[0]:.2f}x+{z[1]:.2f}')
+
+            ax.set_title('Performance Degradation Analysis', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Number of Components Removed')
+            ax.set_ylabel('Performance Degradation (%)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            # 设置x轴刻度
+            if len(x_values) > 0:
+                ax.set_xticks(range(int(min(x_values)), int(max(x_values)) + 1))
+
+            # 添加零线参考
+            ax.axhline(y=0, color='black', linestyle='-', alpha=0.3, linewidth=1)
+
+        except Exception as e:
+            print(f"Error in performance degradation plot: {e}")
+            ax.text(0.5, 0.5, f'Error: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Performance Degradation Analysis')
+
+    def _plot_ablation_pathways_comparison(self, ax):
+        """绘制消融路径比较图 - 适配新数据结构"""
+        try:
+            # 获取路径分析数据
+            pathway_data = self.analyzer.calculate_ablation_pathway_analysis()
+
+            if len(pathway_data) == 0:
+                ax.text(0.5, 0.5, 'No pathway data available',
+                        ha='center', va='center', transform=ax.transAxes)
+                return
+
+            # 筛选路径数据（排除统计信息）
+            path_subset = pathway_data[
+                (pathway_data['pathway_type'] == 'ablation_sequence') &
+                (pathway_data['pathway_length'] > 1)
+                ]
+
+            if len(path_subset) == 0:
+                ax.text(0.5, 0.5, 'No valid pathway sequences found',
+                        ha='center', va='center', transform=ax.transAxes)
+                return
+
+            # 绘制不同路径的性能曲线
+            colors = ['blue', 'red', 'green', 'orange', 'purple']
+
+            for i, (_, row) in enumerate(path_subset.iterrows()):
+                if i >= len(colors):
+                    break
+
+                pathway_name = row['pathway_name']
+
+                # 解析性能列表
+                try:
+                    perf_list_str = row['pathway_performance_list']
+                    if perf_list_str and perf_list_str != '[]':
+                        # 安全地解析字符串列表
+                        perf_list = eval(perf_list_str) if isinstance(perf_list_str, str) else perf_list_str
+
+                        if len(perf_list) > 1:
+                            x_values = list(range(len(perf_list)))
+                            ax.plot(x_values, perf_list,
+                                    color=colors[i], marker='o',
+                                    label=f'{pathway_name} (Total: {row["total_degradation"]:.1f}%)',
+                                    linewidth=2, markersize=6)
+                except Exception as e:
+                    print(f"Error parsing pathway data for {pathway_name}: {e}")
+                    continue
+
+            ax.set_xlabel('Ablation Steps')
+            ax.set_ylabel('Performance (Optimality Gap %)')
+            ax.set_title('Ablation Pathway Comparison')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+        except Exception as e:
+            print(f"Error in pathway plotting: {e} {traceback.format_exc()}")
+            ax.text(0.5, 0.5, f'Plotting error: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax.transAxes)
 
     def _plot_marginal_contributions(self, ax):
         """绘制边际贡献图"""
@@ -708,160 +1300,182 @@ class TSPAdvancedVisualizationSuite:
         ax.set_ylabel('Performance Impact')
         ax.grid(True, alpha=0.3)
 
-    def _plot_interaction_heatmap(self, ax):
-        """绘制交互效应热力图"""
-        # 创建模拟交互效应数据
-        components = ['Current', 'Visited', 'Order', 'Distance']
-        interaction_matrix = np.random.normal(0, 0.02, (4, 4))
-        np.fill_diagonal(interaction_matrix, 0)
-
-        sns.heatmap(interaction_matrix, annot=True, fmt='.3f',
-                    xticklabels=components, yticklabels=components,
-                    cmap='RdBu_r', center=0, ax=ax)
-        ax.set_title('Component Interaction Effects', fontsize=14, fontweight='bold')
-
-    def _plot_importance_ranking(self, ax):
-        """绘制重要性排序"""
-        # 基于消融实验结果的模拟重要性数据
-        components = ['Visited\nMask', 'Current\nCity', 'Order\nEmbedding', 'Distance\nInfo']
-        importance_scores = [0.85, 0.72, 0.45, 0.28]
-
-        bars = ax.barh(components, importance_scores,
-                       color=['#2ca02c', '#1f77b4', '#ff7f0e', '#d62728'])
-
-        # 添加数值标签
-        for bar, value in zip(bars, importance_scores):
-            width = bar.get_width()
-            ax.text(width + 0.01, bar.get_y() + bar.get_height() / 2.,
-                    f'{value:.2f}', ha='left', va='center', fontweight='bold')
-
-        ax.set_title('Component Importance Ranking', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Importance Score')
-        ax.set_xlim(0, 1.0)
-        ax.grid(True, alpha=0.3)
-
-    def _plot_advanced_waterfall(self, ax):
-        """绘制高级瀑布图"""
-        # 模拟消融序列数据
-        labels = ['Full\nState', 'Remove\nDistance', 'Remove\nOrder', 'Remove\nCurrent', 'Minimal\nState']
-        values = [100, 95.2, 87.4, 72.1, 58.3]
-
-        # 绘制瀑布图
-        x_pos = np.arange(len(labels))
-        colors = ['green'] + ['orange'] * 3 + ['red']
-
-        bars = ax.bar(x_pos, values, color=colors, alpha=0.7, edgecolor='black')
-
-        # 添加连接线
-        for i in range(len(values) - 1):
-            ax.plot([i + 0.4, i + 0.6], [values[i], values[i + 1]],
-                    'k--', alpha=0.5, linewidth=1)
-
-        # 添加数值标签和下降幅度
-        for i, (bar, value) in enumerate(zip(bars, values)):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width() / 2., height + 1,
-                    f'{value:.1f}%', ha='center', va='bottom', fontweight='bold')
-
-            if i > 0:
-                drop = values[i - 1] - value
-                ax.text(bar.get_x() + bar.get_width() / 2., height / 2,
-                        f'-{drop:.1f}%', ha='center', va='center',
-                        color='red', fontweight='bold', fontsize=10)
-
-        ax.set_title('Ablation Study Waterfall Chart', fontsize=14, fontweight='bold')
-        ax.set_ylabel('Performance Score (%)')
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.grid(True, alpha=0.3)
-
-    def _plot_significance_analysis(self, ax):
-        """绘制统计显著性分析"""
-        # 模拟显著性数据
-        ablation_types = ['Remove\nDistance', 'Remove\nOrder', 'Remove\nCurrent', 'Remove\nTwo', 'Minimal']
-        p_values = [0.12, 0.03, 0.001, 0.0001, 0.00001]
-        effect_sizes = [0.15, 0.35, 0.68, 0.85, 1.20]
-
-        # 散点图：p值 vs 效应大小
-        colors = ['red' if p < 0.05 else 'gray' for p in p_values]
-        scatter = ax.scatter(effect_sizes, [-np.log10(p) for p in p_values],
-                             c=colors, s=100, alpha=0.7)
-
-        # 添加显著性阈值线
-        ax.axhline(y=-np.log10(0.05), color='red', linestyle='--', alpha=0.5,
-                   label='p=0.05 threshold')
-
-        # 添加标签
-        for i, label in enumerate(ablation_types):
-            ax.annotate(label, (effect_sizes[i], -np.log10(p_values[i])),
-                        xytext=(5, 5), textcoords='offset points', fontsize=9)
-
-        ax.set_title('Statistical Significance Analysis', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Effect Size (Cohen\'s d)')
-        ax.set_ylabel('-log10(p-value)')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-    def _plot_pathway_analysis(self, ax):
-        """绘制消融路径分析"""
-        # 模拟不同消融路径的性能变化
-        pathways = {
-            'Importance-based': [100, 95, 87, 75, 60],
-            'Random order': [100, 88, 82, 78, 62],
-            'Reverse importance': [100, 92, 89, 83, 65]
-        }
-
-        steps = ['Full', 'Step 1', 'Step 2', 'Step 3', 'Minimal']
-
-        for pathway_name, performance in pathways.items():
-            ax.plot(steps, performance, marker='o', linewidth=2,
-                    label=pathway_name, markersize=6)
-
-        ax.set_title('Ablation Pathway Analysis', fontsize=14, fontweight='bold')
-        ax.set_ylabel('Performance Score (%)')
-        ax.set_xlabel('Ablation Steps')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis='x', rotation=45)
-
     def plot_component_contribution_radar(self):
-        """绘制组件贡献雷达图"""
+        """绘制基于真实数据的组件贡献雷达图"""
         print("绘制组件贡献雷达图...")
 
-        fig, axes = plt.subplots(1, 2, figsize=(16, 8), subplot_kw={'projection': 'polar'})
+        try:
+            if len(self.contributions) == 0:
+                print("No contribution data available for radar chart")
+                return
 
-        # 模拟数据：不同算法的组件贡献
-        components = ['Current City', 'Visited Mask', 'Order Embedding', 'Distance Info']
-        algorithms = ['DQN-LSTM', 'ActorCritic']
+            # 从真实数据中提取组件贡献信息
+            marginal_cols = [col for col in self.contributions.columns if 'marginal_contribution' in col]
+            if not marginal_cols:
+                print("No marginal contribution data available for radar chart")
+                return
 
-        # 算法1的贡献度
-        values1 = [0.85, 0.92, 0.65, 0.48]
-        # 算法2的贡献度
-        values2 = [0.78, 0.88, 0.72, 0.55]
+            # 提取组件名称
+            component_names = []
+            for col in marginal_cols:
+                component = col.replace('_marginal_contribution', '').replace('_', ' ').title()
+                component_names.append(component)
 
-        angles = np.linspace(0, 2 * np.pi, len(components), endpoint=False).tolist()
-        values1 += values1[:1]  # 闭合图形
-        values2 += values2[:1]
-        angles += angles[:1]
+            # 按算法分组获取贡献度数据
+            algorithms = self.contributions['algorithm'].unique()
 
-        # 绘制雷达图
-        axes[0].plot(angles, values1, 'o-', linewidth=2, label=algorithms[0])
-        axes[0].fill(angles, values1, alpha=0.25)
-        axes[0].set_xticks(angles[:-1])
-        axes[0].set_xticklabels(components)
-        axes[0].set_title(f'{algorithms[0]} Component Contributions', size=14, fontweight='bold')
-        axes[0].set_ylim(0, 1)
+            if len(algorithms) == 0:
+                print("No algorithm data available for radar chart")
+                return
 
-        axes[1].plot(angles, values2, 'o-', linewidth=2, label=algorithms[1], color='orange')
-        axes[1].fill(angles, values2, alpha=0.25, color='orange')
-        axes[1].set_xticks(angles[:-1])
-        axes[1].set_xticklabels(components)
-        axes[1].set_title(f'{algorithms[1]} Component Contributions', size=14, fontweight='bold')
-        axes[1].set_ylim(0, 1)
+            # 动态确定要显示的算法数量（最多显示4个）
+            display_algorithms = algorithms[:min(4, len(algorithms))]
+            n_algorithms = len(display_algorithms)
 
-        plt.tight_layout()
-        plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-        plt.show()
+            # 创建子图布局
+            if n_algorithms == 1:
+                fig, axes = plt.subplots(1, 1, figsize=(10, 10), subplot_kw={'projection': 'polar'})
+                axes = [axes]
+            elif n_algorithms == 2:
+                fig, axes = plt.subplots(1, 2, figsize=(20, 10), subplot_kw={'projection': 'polar'})
+            elif n_algorithms <= 4:
+                fig, axes = plt.subplots(2, 2, figsize=(20, 20), subplot_kw={'projection': 'polar'})
+                axes = axes.flatten()
+            else:
+                fig, axes = plt.subplots(2, 3, figsize=(24, 16), subplot_kw={'projection': 'polar'})
+                axes = axes.flatten()
+
+            # 设置角度
+            angles = np.linspace(0, 2 * np.pi, len(component_names), endpoint=False).tolist()
+            angles += angles[:1]  # 闭合图形
+
+            # 颜色方案
+            colors = plt.cm.Set3(np.linspace(0, 1, n_algorithms))
+
+            for i, algorithm in enumerate(display_algorithms):
+                if i >= len(axes):
+                    break
+
+                ax = axes[i]
+
+                # 获取该算法的贡献度数据
+                algo_data = self.contributions[self.contributions['algorithm'] == algorithm]
+
+                if len(algo_data) == 0:
+                    ax.text(0.5, 0.5, f'No data for {algorithm}',
+                            ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title(f'{algorithm} - No Data', size=14, fontweight='bold')
+                    continue
+
+                # 计算各组件的平均贡献度
+                component_values = []
+                for col in marginal_cols:
+                    if col in algo_data.columns:
+                        # 使用绝对值并归一化到0-1范围
+                        value = abs(algo_data[col].mean())
+                        component_values.append(value)
+                    else:
+                        component_values.append(0.0)
+
+                # 归一化到0-1范围
+                if max(component_values) > 0:
+                    max_val = max(component_values)
+                    normalized_values = [v / max_val for v in component_values]
+                else:
+                    normalized_values = component_values
+
+                # 闭合雷达图
+                radar_values = normalized_values + normalized_values[:1]
+
+                # 绘制雷达图
+                ax.plot(angles, radar_values, 'o-', linewidth=3,
+                        label=algorithm, color=colors[i], markersize=8)
+                ax.fill(angles, radar_values, alpha=0.25, color=colors[i])
+
+                # 设置标签
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(component_names, fontsize=10)
+
+                # 设置径向标签
+                ax.set_ylim(0, 1)
+                ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+                ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=8)
+                ax.grid(True)
+
+                # 添加数值标签
+                for angle, value, name in zip(angles[:-1], normalized_values, component_names):
+                    ax.text(angle, value + 0.05, f'{value:.2f}',
+                            ha='center', va='center', fontsize=8, fontweight='bold')
+
+                # 设置标题，包含实际的贡献度统计信息
+                mean_contribution = np.mean(component_values)
+                max_contribution = max(component_values)
+                ax.set_title(f'{algorithm}\nMean: {mean_contribution:.3f}, Max: {max_contribution:.3f}',
+                             size=12, fontweight='bold', pad=20)
+
+            # 隐藏多余的子图
+            for j in range(n_algorithms, len(axes)):
+                axes[j].set_visible(False)
+
+            # 添加总体图例和统计信息
+            if n_algorithms > 1:
+                # 在图外添加整体统计信息
+                fig.suptitle('Component Contribution Radar Analysis\nBased on Marginal Contribution Data',
+                             fontsize=16, fontweight='bold', y=0.95)
+
+                # 计算跨算法的组件重要性排序
+                overall_importance = {}
+                for i, col in enumerate(marginal_cols):
+                    component = component_names[i]
+                    overall_value = abs(self.contributions[col].mean())
+                    overall_importance[component] = overall_value
+
+                # 排序并添加文本说明
+                sorted_importance = sorted(overall_importance.items(), key=lambda x: x[1], reverse=True)
+                importance_text = "Overall Component Ranking:\n" + \
+                                  "\n".join([f"{i + 1}. {comp}: {val:.3f}"
+                                             for i, (comp, val) in enumerate(sorted_importance)])
+
+                fig.text(0.02, 0.02, importance_text, fontsize=10,
+                         bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
+
+            plt.tight_layout()
+            plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
+            plt.show()
+
+            # 打印详细的数据分析结果
+            print("\n" + "=" * 60)
+            print("组件贡献雷达图数据分析")
+            print("=" * 60)
+
+            for algorithm in display_algorithms:
+                algo_data = self.contributions[self.contributions['algorithm'] == algorithm]
+                if len(algo_data) > 0:
+                    print(f"\n算法: {algorithm}")
+                    print("-" * 30)
+
+                    for i, col in enumerate(marginal_cols):
+                        component = component_names[i]
+                        if col in algo_data.columns:
+                            mean_val = algo_data[col].mean()
+                            std_val = algo_data[col].std()
+                            print(f"{component}: {mean_val:.4f} (±{std_val:.4f})")
+
+            print("=" * 60)
+
+        except Exception as e:
+            print(f"绘制雷达图时出现错误: {e}")
+            print(f"详细错误信息: {traceback.format_exc()}")
+
+            # 创建一个简单的错误提示图
+            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+            ax.text(0.5, 0.5, f'Error generating radar chart:\n{str(e)[:100]}...',
+                    ha='center', va='center', transform=ax.transAxes,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral", alpha=0.8))
+            ax.set_title('Component Contribution Radar Chart - Error', fontsize=14)
+            ax.axis('off')
+            plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
+            plt.show()
 
     def generate_advanced_summary_report(self):
         """生成高级总结报告"""
@@ -939,24 +1553,24 @@ class TSPAdvancedVisualizationSuite:
 # 执行主程序
 try:
     # 1. 显示状态组合映射
-    # print("=" * 80)
-    # print("TSP消融实验状态组合映射")
-    # print("=" * 80)
-    # for state_type, components in map_state_types.items():
-    #     print(f"{state_type}: {components}")
-    # print("=" * 80)
-    #
-    # # 2. 创建实验数据生成器
-    # print("\n步骤 1: 初始化实验数据生成器...")
-    # generator = TSPAblationExperimentGenerator()
-    #
-    # # 3. 生成实验数据
-    # print("\n步骤 2: 生成实验数据...")
-    # df = generator.generate_full_experiment_data()
-    #
-    # # 3. 保存原始数据
-    # print("\n步骤 3: 保存原始数据...")
-    # df.to_csv('tsp_ablation_experiment_data.csv', index=False)
+    print("=" * 80)
+    print("TSP消融实验状态组合映射")
+    print("=" * 80)
+    for state_type, components in map_state_types.items():
+        print(f"{state_type}: {components}")
+    print("=" * 80)
+
+    # 2. 创建实验数据生成器
+    print("\n步骤 1: 初始化实验数据生成器...")
+    generator = TSPAblationExperimentGenerator()
+
+    # 3. 生成实验数据
+    print("\n步骤 2: 生成实验数据...")
+    df = generator.generate_full_experiment_data()
+
+    # 3. 保存原始数据
+    print("\n步骤 3: 保存原始数据...")
+    df.to_csv('tsp_ablation_experiment_data.csv', index=False)
     # print(f"原始数据已保存到: tsp_ablation_experiment_data.csv")
 
     df = pd.read_csv('tsp_ablation_experiment_data.csv')
