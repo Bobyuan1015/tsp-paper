@@ -542,136 +542,94 @@ class TSPAdvancedAblationAnalyzer:
 
         return ranking
 
-    def _analyze_ablation_pathways(self, performance_dict: Dict[str, float]) -> Dict[str, Dict]:
+    def _analyze_ablation_pathways(self, performance_dict: Dict[str, float],
+                                   performance_better_when: str = 'smaller') -> Dict[str, Dict]:
         """
-        分析不同的消融路径
+        对比  剔除 状态个数 的衰减（组合中最小衰减 和 最大衰减）
 
-        消融路径分析的目的：
-        1. 理解组件移除的顺序对性能的影响
-        2. 发现组件间的依赖关系
-        3. 确定最优的特征选择策略
-
-        路径分析方法：
-        - 逐步消融：按照重要性顺序逐个移除组件
-        - 性能退化曲线：观察每一步的性能变化
-        - 退化率分析：计算每步的性能下降速度
-
-        例子：
-        假设有4个组件 [A, B, C, D]，按重要性排序为 [B, A, D, C]
-        路径为：完整 → -B → -B-A → -B-A-D → -B-A-D-C
-        对应性能：15% → 25% → 35% → 40% → 50%
-        退化率：[10%, 10%, 5%, 10%]
+        Args:
+            performance_dict: 性能字典
+            performance_better_when: 'smaller'表示越小越好，'larger'表示越大越好
         """
         pathways = {}
         full_perf = performance_dict.get('full', 0)
 
-        # 路径1: 按照重要性顺序逐步消融（基于领域知识的顺序）
-        importance_order = ['visited', 'current', 'order', 'distances']
+        # 根据优化方向确定"更好"的含义
+        if performance_better_when == 'smaller':
+            # 对于optimality_gap等指标，越小越好
+            def is_better(val1, val2):
+                return val1 < val2
 
-        # 修正：直接使用单组件移除的性能数据来模拟逐步消融路径
-        pathway_perf = [full_perf]
+            def get_degradation(current, baseline):
+                return current - baseline  # 正值表示性能变差
+        else:
+            # 对于reward等指标，越大越好
+            def is_better(val1, val2):
+                return val1 > val2
 
-        # 计算每一步的累积影响（近似方法）
-        cumulative_impact = 0
-        base_performance = full_perf
+            def get_degradation(current, baseline):
+                return baseline - current  # 正值表示性能变差
 
-        for i, comp in enumerate(importance_order):
-            # 获取单独移除该组件的性能
-            single_remove_key = f'ablation_remove_{comp}'
-
-            if single_remove_key in performance_dict:
-                # 单组件移除的影响
-                single_impact = performance_dict[single_remove_key] - full_perf
-
-                # 累积影响（假设组件影响具有一定的叠加性）
-                # 使用衰减因子模拟组件间的交互作用
-                decay_factor = 0.8 ** i  # 后续组件的边际影响递减
-                cumulative_impact += single_impact * decay_factor
-
-                # 计算累积消融后的性能
-                cumulative_perf = base_performance + cumulative_impact
-                pathway_perf.append(cumulative_perf)
-            else:
-                # 如果没有对应的单组件数据，使用估计值
-                estimated_impact = 2.0 * (i + 1)  # 简单的线性估计
-                cumulative_impact += estimated_impact
-                pathway_perf.append(base_performance + cumulative_impact)
-
-        # 路径2: 基于实际可用数据的消融路径
+        # 构建基于实际数据的路径
         available_pathways = {}
 
-        # 分析实际存在的消融组合
         for state_key, performance in performance_dict.items():
             if state_key.startswith('ablation_remove_') and state_key != 'full':
-                # 提取被移除的组件
                 removed_components = state_key.replace('ablation_remove_', '').split('_')
+                print(f"removed_components={removed_components}")
                 num_removed = len(removed_components)
 
                 if num_removed not in available_pathways:
                     available_pathways[num_removed] = []
 
+                degradation = get_degradation(performance, full_perf)
                 available_pathways[num_removed].append({
                     'components': removed_components,
                     'performance': performance,
-                    'degradation': performance - full_perf
+                    'degradation': degradation
                 })
 
-        # 构建基于实际数据的路径
+        # 构建最优路径（最小性能退化）
         actual_pathway_perf = [full_perf]
         actual_pathway_components = []
 
-        # 按移除组件数量排序，构建渐进消融路径
-        for num_removed in sorted(available_pathways.keys()):
-            # 选择性能最好的组合（最小退化）
+        for num_removed in sorted(available_pathways.keys()): # remove状态，从少到多，性能逐渐退化
+            # 选择性能退化最小的组合
             best_combination = min(available_pathways[num_removed],
                                    key=lambda x: x['degradation'])
             actual_pathway_perf.append(best_combination['performance'])
             actual_pathway_components.append(best_combination['components'])
 
-        # 路径3: 最坏情况路径（最大性能退化）
+        # 构建最坏路径（最大性能退化）
         worst_pathway_perf = [full_perf]
+        worst_pathway_components =[]
         for num_removed in sorted(available_pathways.keys()):
             worst_combination = max(available_pathways[num_removed],
                                     key=lambda x: x['degradation'])
             worst_pathway_perf.append(worst_combination['performance'])
+            worst_pathway_components.append(worst_combination['components'])
 
-        # 整合所有路径结果
-        pathways['importance_based'] = {
-            'pathway_performance': pathway_perf,
-            'total_degradation': pathway_perf[-1] - pathway_perf[0] if len(pathway_perf) > 1 else 0,
-            'degradation_rate': np.diff(pathway_perf).tolist() if len(pathway_perf) > 1 else [],
-            'pathway_description': 'Based on domain knowledge importance order'
+
+        # 按照remove state组合个数为单位统计
+        pathways['optimal_actual'] = {
+            'pathway_performance': actual_pathway_perf,
+            'total_degradation': get_degradation(actual_pathway_perf[-1], actual_pathway_perf[0]) if len(
+                actual_pathway_perf) > 1 else 0,
+            'degradation_rate': [get_degradation(actual_pathway_perf[i + 1], actual_pathway_perf[i])
+                                 for i in range(len(actual_pathway_perf) - 1)],
+            'pathway_components': actual_pathway_components,
+            'pathway_description': f'Optimal path (minimal degradation, {performance_better_when} is better)'
         }
 
-        if actual_pathway_perf:
-            pathways['optimal_actual'] = {
-                'pathway_performance': actual_pathway_perf,
-                'total_degradation': actual_pathway_perf[-1] - actual_pathway_perf[0] if len(
-                    actual_pathway_perf) > 1 else 0,
-                'degradation_rate': np.diff(actual_pathway_perf).tolist() if len(actual_pathway_perf) > 1 else [],
-                'pathway_components': actual_pathway_components,
-                'pathway_description': 'Optimal path based on actual data (minimal degradation)'
-            }
-
-        if worst_pathway_perf:
-            pathways['worst_case'] = {
-                'pathway_performance': worst_pathway_perf,
-                'total_degradation': worst_pathway_perf[-1] - worst_pathway_perf[0] if len(
-                    worst_pathway_perf) > 1 else 0,
-                'degradation_rate': np.diff(worst_pathway_perf).tolist() if len(worst_pathway_perf) > 1 else [],
-                'pathway_description': 'Worst case path (maximal degradation)'
-            }
-
-        # 计算路径特征统计
-        pathways['pathway_statistics'] = {
-            'num_available_combinations': sum(len(combs) for combs in available_pathways.values()),
-            'max_components_removed': max(available_pathways.keys()) if available_pathways else 0,
-            'average_single_step_degradation': np.mean([
-                np.mean(np.diff(pathway['pathway_performance']))
-                for pathway in pathways.values()
-                if isinstance(pathway, dict) and 'pathway_performance' in pathway and len(
-                    pathway['pathway_performance']) > 1
-            ]) if len(pathways) > 0 else 0
+        # 按照remove state组合个数为单位统计
+        pathways['worst_case'] = {
+            'pathway_performance': worst_pathway_perf,
+            'total_degradation': get_degradation(worst_pathway_perf[-1], worst_pathway_perf[0]) if len(
+                worst_pathway_perf) > 1 else 0,
+            'degradation_rate': [get_degradation(worst_pathway_perf[i + 1], worst_pathway_perf[i])
+                                 for i in range(len(worst_pathway_perf) - 1)],
+            'pathway_components': worst_pathway_components,
+            'pathway_description': f'Worst case path (maximal degradation, {performance_better_when} is better)'
         }
 
         return pathways
@@ -695,28 +653,16 @@ class TSPAdvancedAblationAnalyzer:
 
         return best_match
 
-    def calculate_ablation_pathway_analysis(self) -> pd.DataFrame:
+    def calculate_ablation_pathway_analysis(self, performance_better_when='smaller') -> pd.DataFrame:
         """
-        消融路径分析 - 分析不同消融顺序的影响
+        消融路径分析 - 支持不同的性能优化方向
 
-        路径分析目标：
-        1. 识别最优消融策略
-        2. 量化组件移除的顺序效应
-        3. 发现组件间的依赖模式
-
-        分析方法：
-        - 多路径比较：理论路径 vs 实际路径 vs 最坏路径
-        - 退化率分析：每步性能下降的速度
-        - 路径效率评估：达到同等性能下降所需的最少组件移除
-
-        例子：
-        假设有三条路径：
-        理论路径：15% → 25% → 40% → 65% (退化率: [10%, 15%, 25%])
-        最优路径：15% → 20% → 35% → 60% (退化率: [5%, 15%, 25%])
-        最坏路径：15% → 30% → 50% → 80% (退化率: [15%, 20%, 30%])
-        结论：最优路径在前期保持了更好的性能稳定性
+        Args:
+            performance_better_when (str):
+                - 'smaller': 性能指标越小越好（如TSP的optimality_gap, distance）
+                - 'larger': 性能指标越大越好（如reward, accuracy）
         """
-        print("执行消融路径分析...")
+        print(f"执行消融路径分析... (性能指标: {performance_better_when} is better)")
 
         metrics = self.calculate_performance_metrics()
         pathway_analysis = []
@@ -738,13 +684,14 @@ class TSPAdvancedAblationAnalyzer:
 
                         performance_dict = {}
                         for _, row in subset.iterrows():
-                            performance_dict[row['state_type']] = row['optimality_gap_mean']
+                            performance_dict[row['state_type']] = row['optimality_gap_mean'] #注视：这里配置performance取值
 
                         if 'full' not in performance_dict:
                             continue
 
-                        # 分析消融路径 - 使用修正后的函数
-                        pathways = self._analyze_ablation_pathways(performance_dict)
+
+                        # 对比  剔除 状态个数 的衰减（组合中最小衰减 和 最大衰减）
+                        pathways = self._analyze_ablation_pathways(performance_dict, performance_better_when)
 
                         # 处理新的路径结构
                         for pathway_name, pathway_data in pathways.items():
@@ -771,7 +718,7 @@ class TSPAdvancedAblationAnalyzer:
                                 pathway_analysis.append(result)
                             else:
                                 # 处理具体路径数据
-                                pathway_performance = pathway_data.get('pathway_performance', [])
+                                pathway_performance = pathway_data.get('pathway_performance', []) # 首元素为 full状态的performance
                                 degradation_rates = pathway_data.get('degradation_rate', [])
                                 total_degradation = pathway_data.get('total_degradation', 0)
 
@@ -1593,7 +1540,8 @@ try:
 
     # 7. 计算消融路径分析
     print("\n步骤 7: 计算消融路径分析...")
-    pathway_analysis = analyzer.calculate_ablation_pathway_analysis()
+    pathway_analysis = analyzer.calculate_ablation_pathway_analysis(performance_better_when='smaller')
+
     if len(pathway_analysis) > 0:
         pathway_analysis.to_csv('ablation_pathway_analysis.csv', index=False)
         print("消融路径分析已保存到: ablation_pathway_analysis.csv")
