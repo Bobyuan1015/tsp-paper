@@ -14,6 +14,8 @@ class Logger:
     
     def __init__(self, 
                  experiment_name: str,
+                 algorithm: str = None,
+                 mode: str = None,
                  log_level: str = "INFO",
                  save_to_file: bool = True,
                  console_output: bool = True):
@@ -22,15 +24,27 @@ class Logger:
         
         Args:
             experiment_name: Name of the experiment
+            algorithm: Algorithm name for file naming
+            mode: Mode name for file naming
             log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
             save_to_file: Whether to save logs to file
             console_output: Whether to output logs to console
         """
+        self.buffer_size = 1000  # 缓存1000条记录再写入
+        self.csv_buffer = []
+
         self.experiment_name = experiment_name
+        self.algorithm = algorithm
+        self.mode = mode
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Create experiment directory
-        self.experiment_dir = os.path.join(project_root, "results", experiment_name, self.timestamp)
+        # Create experiment directory with algorithm and mode in path
+        if algorithm and mode:
+            dir_name = f"{experiment_name}_{algorithm}_{mode}_{self.timestamp}"
+        else:
+            dir_name = f"{experiment_name}_{self.timestamp}"
+        
+        self.experiment_dir = os.path.join(project_root, "results", dir_name)
         os.makedirs(self.experiment_dir, exist_ok=True)
         
         # Setup standard logger
@@ -41,12 +55,17 @@ class Logger:
         self.csv_headers = [
             'algorithm', 'city_num', 'mode', 'instance_id', 'run_id', 'state_type',
             'train_test', 'episode', 'step', 'action', 'state', 'done', 'reward', 
-            'loss', 'total_reward', 'current_length','optimal_distance','optimal_path',
+            'loss', 'total_reward', 'current_distance','optimal_distance','optimal_path',
             'coordinates', 'state_values', 'timestamp'
         ]
         
-        # Initialize CSV file
-        self.csv_file = os.path.join(self.experiment_dir, "experiment_data.csv")
+        # Initialize CSV file with algorithm and mode in filename
+        if algorithm and mode:
+            csv_filename = f"{algorithm}_{mode}_experiment_data_{self.timestamp}.csv"
+        else:
+            csv_filename = f"experiment_data_{self.timestamp}.csv"
+        
+        self.csv_file = os.path.join(self.experiment_dir, csv_filename)
         self._init_csv_file()
         
         # Experiment metadata
@@ -56,26 +75,45 @@ class Logger:
             'experiment_dir': self.experiment_dir
         }
         
-        self.logger.info(f"Initialized logger for experiment: {experiment_name}")
+        if self.algorithm and self.mode:
+            self.logger.info(f"Initialized logger for experiment: {experiment_name} [{self.algorithm}-{self.mode}]")
+        else:
+            self.logger.info(f"Initialized logger for experiment: {experiment_name}")
         self.logger.info(f"Experiment directory: {self.experiment_dir}")
     
     def _setup_logger(self, log_level: str, save_to_file: bool, console_output: bool) -> logging.Logger:
         """Setup logger with file and console handlers."""
-        logger = logging.getLogger(f"tsp_experiment_{self.experiment_name}")
+        # Create unique logger name with algorithm and mode
+        if self.algorithm and self.mode:
+            logger_name = f"tsp_{self.algorithm}_{self.mode}_{self.timestamp}"
+        else:
+            logger_name = f"tsp_experiment_{self.experiment_name}_{self.timestamp}"
+        
+        logger = logging.getLogger(logger_name)
         logger.setLevel(getattr(logging, log_level.upper()))
         
         # Clear any existing handlers
         logger.handlers.clear()
         
-        # Create formatter
+        # Create formatter with algorithm and mode prefix
+        if self.algorithm and self.mode:
+            format_str = f'[%(asctime)s][{self.algorithm}-{self.mode}][%(levelname)s]: %(message)s'
+        else:
+            format_str = '[%(asctime)s][%(name)s][%(levelname)s]: %(message)s'
+        
         formatter = logging.Formatter(
-            '[%(asctime)s][%(name)s][%(levelname)s]: %(message)s',
+            format_str,
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         
-        # File handler
+        # File handler with algorithm and mode in filename
         if save_to_file:
-            log_file = os.path.join(self.experiment_dir, "experiment.log")
+            if self.algorithm and self.mode:
+                log_filename = f"{self.algorithm}_{self.mode}_experiment_{self.timestamp}.log"
+            else:
+                log_filename = f"experiment_{self.timestamp}.log"
+            
+            log_file = os.path.join(self.experiment_dir, log_filename)
             file_handler = logging.FileHandler(log_file)
             file_handler.setLevel(getattr(logging, log_level.upper()))
             file_handler.setFormatter(formatter)
@@ -112,7 +150,7 @@ class Logger:
                          reward: float,
                          loss: Optional[float] = None,
                          total_reward: Optional[float] = None,
-                         current_length=None,
+                         current_distance=None,
                          optimal_distance=None,
                          optimal_path=[],
                          coordinates=None,
@@ -136,7 +174,7 @@ class Logger:
             reward: Reward received
             loss: Loss value (if available)
             total_reward: Total reward so far in episode
-            current_length: Current tour length
+            current_distance: Current tour length
             optimal_distance: Optimal distance for this instance
             optimal_path: Optimal path for this instance
             coordinates: City coordinates for this instance
@@ -158,25 +196,32 @@ class Logger:
         row_data = [
             algorithm, city_num, mode, instance_id, run_id, state_type,
             train_test, episode, step, action, json.dumps(state_json), 
-            int(done), reward, loss or '', total_reward or '', current_length,optimal_distance, optimal_path,
+            int(done), reward, loss or '', total_reward or '', current_distance,optimal_distance, optimal_path,
             coordinates_json, state_values_json, datetime.now().isoformat()
         ]
+        self.csv_buffer.append(row_data)
+        # 达到缓存大小时批量写入
+        if len(self.csv_buffer) >= self.buffer_size:
+            self._flush_buffer()
+
+
         
-        # Append to CSV
-        with open(self.csv_file, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(row_data)
-        
-        # Log to standard logger
-        log_msg = (f"[{algorithm}][{city_num}cities][{state_type}][{mode}]"
-                  f"[Episode {episode}][Step {step}]: "
+        # Log to standard logger with simplified format (algorithm/mode already in logger prefix)
+        log_msg = (f"[{city_num}cities][{state_type}][Episode {episode}][Step {step}]: "
                   f"Action={action}, Reward={reward:.4f}, Done={done}")
         
         if loss is not None:
             log_msg += f", Loss={loss:.6f}"
         
         self.logger.debug(log_msg)
-    
+
+    def _flush_buffer(self):
+        if self.csv_buffer:
+            with open(self.csv_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerows(self.csv_buffer)
+            self.csv_buffer.clear()
+
     def log_episode_summary(self,
                            algorithm: str,
                            city_num: int,
@@ -205,10 +250,9 @@ class Logger:
             episode_length: Number of steps in episode
             metrics: Additional metrics (loss, etc.)
         """
-        log_msg = (f"[{algorithm}][{city_num}cities][{state_type}][{mode}]"
-                  f"[Episode {episode} SUMMARY]: "
-                  f"Total Reward={total_reward:.4f}, "
-                  f"Length={episode_length}")
+        # Simplified format since algorithm/mode already in logger prefix
+        log_msg = (f"[{city_num}cities][{state_type}][Episode {episode} SUMMARY]: "
+                  f"Reward={total_reward:.4f}, Steps={episode_length}")
         
         if metrics:
             metric_strs = [f"{k}={v:.6f}" for k, v in metrics.items()]
@@ -227,14 +271,43 @@ class Logger:
                               current_task: int = None,
                               total_tasks: int = None):
         """Log overall experiment progress."""
-        progress_msg = (f"[{algorithm}][{city_num}cities][{mode}] "
-                       f"Progress: Instance {current_instance}/{total_instances}, "
-                       f"Run {current_run}/{total_runs}")
+        # Calculate progress percentages
+        instance_pct = (current_instance / total_instances) * 100 if total_instances > 0 else 0
+        run_pct = (current_run / total_runs) * 100 if total_runs > 0 else 0
+        
+        progress_msg = (f"[{city_num}cities] Progress: "
+                       f"Instance {current_instance}/{total_instances} ({instance_pct:.1f}%), "
+                       f"Run {current_run}/{total_runs} ({run_pct:.1f}%)")
         
         # Add total progress if provided
         if current_task is not None and total_tasks is not None and total_tasks > 0:
-            percentage = (current_task / total_tasks) * 100
-            progress_msg += f" | 总进度: {current_task}/{total_tasks} ({percentage:.1f}%)"
+            total_pct = (current_task / total_tasks) * 100
+            progress_msg += f" | Overall: {current_task}/{total_tasks} ({total_pct:.1f}%)"
+        
+        # Update progress_dict if available
+        if hasattr(self, 'progress_dict') and self.progress_dict is not None and hasattr(self, 'task_key') and self.task_key:
+            try:
+                # Update progress details in a way that works with multiprocessing Manager
+                progress_data = dict(self.progress_dict.get(self.task_key, {}))
+                progress_data.update({
+                    "current": current_task if current_task is not None else 0,
+                    "total": total_tasks if total_tasks is not None else 0,
+                    "status": "running",
+                    "details": {
+                        "city_num": city_num,
+                        "mode": mode,
+                        "current_instance": current_instance,
+                        "total_instances": total_instances,
+                        "current_run": current_run,
+                        "total_runs": total_runs,
+                        "instance_pct": instance_pct,
+                        "run_pct": run_pct,
+                        "total_pct": total_pct if current_task is not None and total_tasks is not None and total_tasks > 0 else 0
+                    }
+                })
+                self.progress_dict[self.task_key] = progress_data
+            except Exception as e:
+                self.logger.warning(f"Failed to update progress_dict: {e}")
         
         self.logger.info(progress_msg)
     
@@ -245,8 +318,8 @@ class Logger:
                               mode: str,
                               metrics: Dict[str, float]):
         """Log performance metrics."""
-        metrics_msg = (f"[{algorithm}][{city_num}cities][{state_type}][{mode}] "
-                      f"Performance Metrics: ")
+        # Simplified format since algorithm/mode already in logger prefix
+        metrics_msg = (f"[{city_num}cities][{state_type}] Performance Metrics: ")
         
         metric_strs = [f"{k}={v:.6f}" for k, v in metrics.items()]
         metrics_msg += ", ".join(metric_strs)
@@ -255,10 +328,17 @@ class Logger:
     
     def save_experiment_summary(self, summary_data: Dict[str, Any]):
         """Save experiment summary to JSON file."""
-        summary_file = os.path.join(self.experiment_dir, "experiment_summary.json")
+        if self.algorithm and self.mode:
+            summary_filename = f"{self.algorithm}_{self.mode}_experiment_summary_{self.timestamp}.json"
+        else:
+            summary_filename = f"experiment_summary_{self.timestamp}.json"
+        
+        summary_file = os.path.join(self.experiment_dir, summary_filename)
         
         summary_data.update(self.metadata)
         summary_data['end_time'] = datetime.now().strftime("%Y%m%d_%H%M%S")
+        summary_data['algorithm'] = self.algorithm
+        summary_data['mode'] = self.mode
         
         with open(summary_file, 'w') as f:
             json.dump(summary_data, f, indent=2)
@@ -270,7 +350,8 @@ class Logger:
         algorithm_dir = os.path.join(self.experiment_dir, algorithm)
         os.makedirs(algorithm_dir, exist_ok=True)
         
-        algorithm_csv = os.path.join(algorithm_dir, f"{algorithm}_data.csv")
+        csv_filename = f"{algorithm}_data_{self.timestamp}.csv"
+        algorithm_csv = os.path.join(algorithm_dir, csv_filename)
         
         # Initialize with headers
         with open(algorithm_csv, 'w', newline='') as f:

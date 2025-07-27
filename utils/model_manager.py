@@ -1,6 +1,7 @@
 import os
 import glob
 import json
+import traceback
 from typing import Dict, Any, Optional
 import torch
 
@@ -127,9 +128,9 @@ class ModelManager:
             for file_path in files_to_remove:
                 try:
                     os.remove(file_path)
-                    print(f"Removed old model: {os.path.basename(file_path)}")
+                    # print(f"Removed old model: {os.path.basename(file_path)}")
                 except OSError as e:
-                    print(f"Warning: Could not remove {file_path}: {e}")
+                    print(f"Warning: Could not remove {file_path}: {e} {traceback.format_exc()}")
     
     def get_best_model_path(self) -> Optional[str]:
         """Get path to the best model."""

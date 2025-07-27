@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""
-Main entry point for TSP RL experiments.
-This script provides a unified interface to run all experiments.
-"""
+
 
 import sys
 import os
+import time
 import traceback
 import random
+import threading
 import numpy as np
 import torch
 from typing import Dict, Any, List
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count, Manager
 
 import yaml
-
+from itertools import combinations
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,16 +24,39 @@ from environments import TSPEnvironment
 from agents import DQNAgent, DQNLSTMAgent, ReinforceAgent, ActorCriticAgent, PPOAgent
 from utils import Logger, Evaluator, RewardCalculator, DatasetGenerator, DatasetLoader, ModelManager
 
+def build_state_combinations():
+    """构建消融实验的状态组合映射"""
+    base_states = ["current_city_onehot", "visited_mask", "order_embedding", "distances_from_current"]
+
+    map_state_types = {}
+
+    # 1. 全状态（基线）
+    map_state_types['full'] = base_states.copy()
+
+    # 2. 依次移除一种状态（4种组合）
+    for i, state_to_remove in enumerate(base_states):
+        remaining_states = [s for s in base_states if s != state_to_remove]
+        map_state_types[f'ablation_remove_{state_to_remove.split("_")[0]}'] = remaining_states
+
+    # 3. 依次移除两种状态（6种组合）
+    for i, (state1, state2) in enumerate(combinations(base_states, 2)):
+        remaining_states = [s for s in base_states if s not in [state1, state2]]
+        key_name = f'ablation_remove_{state1.split("_")[0]}_{state2.split("_")[0]}'
+        map_state_types[key_name] = remaining_states
+
+    return map_state_types
 
 class ExperimentRunner:
     """Main experiment runner for TSP RL experiments."""
     
-    def __init__(self, config_file: str = "experiment_config.yaml"):
+    def __init__(self, config_file: str = "experiment_config.yaml", algorithm: str = None, mode: str = None):
         """
         Initialize experiment runner.
         
         Args:
             config_file: Configuration file name
+            algorithm: Specific algorithm to run (for parallel execution)
+            mode: Specific mode to run (for parallel execution)
         """
         # Load configurations
         self.experiment_config = config_loader.load_experiment_config(config_file)
@@ -41,10 +65,27 @@ class ExperimentRunner:
         # Set global seed
         self.seed = self.experiment_config['experiment']['seed']
         self._set_global_seed(self.seed)
+
+        #不使用配置
+        self.experiment_config['state_types'] = build_state_combinations()
+
+        
+        # Store algorithm and mode for this instance
+        self.algorithm = algorithm
+        self.mode = mode
+        
+        # Create experiment name with algorithm and mode if specified
+        base_name = self.experiment_config['experiment']['name']
+        if algorithm and mode:
+            experiment_name = f"{base_name}_{algorithm}_{mode}"
+        else:
+            experiment_name = base_name
         
         # Initialize components
         self.logger = Logger(
-            experiment_name=self.experiment_config['experiment']['name'],
+            experiment_name=experiment_name,
+            algorithm=algorithm,
+            mode=mode,
             log_level=self.experiment_config['logging']['level'],
             save_to_file=self.experiment_config['logging']['save_to_file'],
             console_output=self.experiment_config['logging']['console_output']
@@ -73,6 +114,9 @@ class ExperimentRunner:
         # Progress tracking
         self.total_tasks = 0
         self.completed_tasks = 0
+        
+        # Progress callback for external monitoring
+        self.progress_callback = None
         
     def _set_global_seed(self, seed: int):
         """Set global random seed for reproducibility."""
@@ -239,11 +283,26 @@ class ExperimentRunner:
             
             for run_id in range(repeat_runs):
                 self.completed_tasks += 1
+                
+                # Calculate local progress for this instance/run combination
+                total_instance_runs = len(train_data) * repeat_runs
+                current_instance_run = instance_id * repeat_runs + run_id + 1
+                local_progress = (current_instance_run / total_instance_runs) * 100
+                
+                # Update external progress if callback available
+                if hasattr(self, 'progress_callback') and self.progress_callback:
+                    self.progress_callback(
+                        self.completed_tasks, 
+                        self.total_tasks, 
+                        f"Instance {instance_id + 1}/{len(train_data)}, Run {run_id + 1}/{repeat_runs}"
+                    )
+                
                 self.logger.log_experiment_progress(
                     algorithm, city_num, "per_instance", 
                     instance_id + 1, len(train_data), run_id + 1, repeat_runs,
                     self.completed_tasks, self.total_tasks
                 )
+                self.logger.logger.info(f"Local Progress: {current_instance_run}/{total_instance_runs} ({local_progress:.1f}%)")
                 
                 # Create environment and agent
                 env = self.dataset_loader.create_env_from_instance(
@@ -274,6 +333,17 @@ class ExperimentRunner:
                 for instance_id in range(len(test_data)):
                     instance_data = test_data[instance_id]
                     self.completed_tasks += 1
+                    
+                    test_progress = ((instance_id + 1) / len(test_data)) * 100
+                    self.logger.logger.info(f"Testing instance {instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
+                    
+                    # Log testing progress
+                    self.logger.log_experiment_progress(
+                        algorithm, city_num, "per_instance_testing",
+                        instance_id + 1, len(test_data), 1, 1,
+                        self.completed_tasks, self.total_tasks
+                    )
+                    
                     # Create fresh environment and agent for zero-shot test
                     env = self.dataset_loader.create_env_from_instance(
                         instance_data, state_components
@@ -292,9 +362,10 @@ class ExperimentRunner:
         """Handle cross-instance training logic."""
         for run_id in range(repeat_runs):
             self.completed_tasks += 1
+            
             self.logger.log_experiment_progress(
                 algorithm, city_num, "cross_instance", 
-                1, 1, run_id + 1, repeat_runs,
+                1, len(train_data), run_id + 1, repeat_runs,
                 self.completed_tasks, self.total_tasks
             )
             
@@ -322,6 +393,17 @@ class ExperimentRunner:
             # Test on test instances
             for instance_id in range(len(test_data)):
                 self.completed_tasks += 1
+                
+                test_progress = ((instance_id + 1) / len(test_data)) * 100
+                self.logger.logger.info(f"Testing instance {instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
+                
+                # Log testing progress
+                self.logger.log_experiment_progress(
+                    algorithm, city_num, "cross_instance_testing",
+                    instance_id + 1, len(test_data), 1, 1,
+                    self.completed_tasks, self.total_tasks
+                )
+                
                 instance_data = test_data[instance_id]
                 
                 env = self.dataset_loader.create_env_from_instance(
@@ -490,41 +572,136 @@ class ExperimentRunner:
             algorithm, city_num, mode, instance_id, run_id, state_type,
             train_test, 0, total_reward, step
         )
-    #
-    # def run_experiments(self):
-    #     """Run all experiments."""
-    #     self.logger.logger.info("Starting TSP RL experiments")
-    #
-    #     try:
-    #         # Prepare datasets
-    #         self.prepare_datasets()
-    #
-    #         # Calculate total tasks for progress tracking
-    #         self._calculate_total_tasks()
-    #
-    #         # Run experiments
-    #         modes = self.experiment_config['modes']
-    #
-    #         # if "per_instance" in modes:
-    #         #     self.run_mode("per_instance")
-    #         #
-    #         if "cross_instance" in modes:
-    #             self.run_mode("cross_instance")
-    #
-    #         # Analyze results
-    #         analysis = self.logger.analyze_results()
-    #         self.logger.save_experiment_summary(analysis)
-    #
-    #         self.logger.logger.info("All experiments completed successfully")
-    #
-    #     except Exception as e:
-    #         self.logger.logger.error(f"Experiment failed: {e}")
-    #         raise
 
+
+
+
+def run_single_experiment(algorithm: str, mode: str, config_file: str = "experiment_config.yaml", progress_dict=None):
+    """Run a single experiment for a specific algorithm and mode."""
+    try:
+        print(f"[{algorithm}-{mode}] Starting experiment...")
+        
+        # Initialize progress tracking
+        if progress_dict is not None:
+            task_key = f"{algorithm}-{mode}"
+            progress_dict[task_key] = {"current": 0, "total": 0, "status": "starting"}
+
+        # Create experiment runner for this specific algorithm/mode combination
+        runner = ExperimentRunner(config_file=config_file, algorithm=algorithm, mode=mode)
+        if progress_dict is not None:
+            runner.progress_dict = progress_dict
+            runner.task_key = task_key
+            # Set up progress callback in logger
+            runner.logger.progress_dict = progress_dict
+            runner.logger.task_key = task_key
+        
+        # Filter the runner to only run specific algorithm and mode
+        original_algorithms = runner.experiment_config['algorithms']
+        original_modes = runner.experiment_config['modes']
+        
+        # Override config for this specific run
+        runner.experiment_config['algorithms'] = [algorithm]
+        runner.experiment_config['modes'] = [mode]
+        
+        print(f"[{algorithm}-{mode}] Preparing datasets...")
+        # Prepare datasets
+        runner.prepare_datasets()
+        
+        print(f"[{algorithm}-{mode}] Calculating total tasks...")
+        # Calculate total tasks for this specific experiment
+        runner._calculate_total_tasks()
+        
+        # Update progress with total tasks
+        if progress_dict is not None:
+            progress_dict[task_key]["total"] = runner.total_tasks
+            progress_dict[task_key]["status"] = "running"
+        
+        print(f"[{algorithm}-{mode}] Starting {mode} mode with {runner.total_tasks} total tasks...")
+        # Run the specific mode
+        if mode == "per_instance":
+            runner.run_per_instance_mode()
+        elif mode == "cross_instance":
+            runner.run_cross_instance_mode()
+        
+        print(f"[{algorithm}-{mode}] Analyzing results...")
+        # Analyze results for this specific experiment
+        analysis = runner.logger.analyze_results()
+        runner.logger.save_experiment_summary(analysis)
+        
+        # Mark as completed
+        if progress_dict is not None:
+            progress_dict[task_key]["status"] = "completed"
+            progress_dict[task_key]["current"] = progress_dict[task_key]["total"]
+        
+        print(f"[{algorithm}-{mode}] Experiment completed successfully!")
+        return f"Completed: {algorithm} - {mode}"
+        
+    except Exception as e:
+        # Mark as failed
+        if progress_dict is not None:
+            progress_dict[task_key]["status"] = "failed"
+        
+        error_msg = f"Failed: {algorithm} - {mode}: {str(e)}"
+        print(f"[{algorithm}-{mode}] ERROR: {str(e)}")
+        return error_msg
+
+
+def print_progress_table(progress_dict):
+    """Print a formatted progress table for all running experiments."""
+    if not progress_dict:
+        return
+    
+    print("\n" + "="*120)
+    print(f"{'Task':<15} {'Status':<10} {'Overall':<12} {'Details':<75}")
+    print("-"*120)
+    
+    for task_id, info in progress_dict.items():
+        status = info.get('status', 'Unknown')
+        current = info.get('current', 0)
+        total = info.get('total', 0)
+        details_info = info.get('details', {})
+        
+        # Overall progress
+        if total > 0:
+            percentage = (current / total) * 100
+            overall_str = f"{current}/{total} ({percentage:.1f}%)"
+        else:
+            overall_str = "N/A"
+        
+        # Detailed progress from log_experiment_progress
+        if details_info:
+            city_num = details_info.get('city_num', '?')
+            mode = details_info.get('mode', '?')
+            curr_inst = details_info.get('current_instance', 0)
+            total_inst = details_info.get('total_instances', 0)
+            curr_run = details_info.get('current_run', 0)
+            total_run = details_info.get('total_runs', 0)
+            inst_pct = details_info.get('instance_pct', 0)
+            run_pct = details_info.get('run_pct', 0)
+            total_pct = details_info.get('total_pct', 0)
+            
+            details_str = (f"[{city_num}cities] {mode} | "
+                          f"Inst {curr_inst}/{total_inst} ({inst_pct:.1f}%) | "
+                          f"Run {curr_run}/{total_run} ({run_pct:.1f}%) | "
+                          f"Total {total_pct:.1f}%")
+        else:
+            details_str = "No details available"
+        
+        print(f"{task_id:<15} {status:<10} {overall_str:<12} {details_str[:75]:<75}")
+    
+    print("="*120 + "\n")
+
+
+def monitor_progress(progress_dict, stop_event):
+    """Background thread to monitor and display progress."""
+    while not stop_event.is_set():
+        time.sleep(10)  # Update every 10 seconds
+        if progress_dict:
+            print_progress_table(progress_dict)
 
 
 def main():
-    """Main function to run experiments."""
+    """Main function to run experiments with parallel execution by algorithm and mode."""
 
     # Load configuration from YAML file (for backward compatibility)
     config_path = "confs/experiment_config.yaml"
@@ -539,36 +716,120 @@ def main():
         print(f"Error parsing YAML configuration: {e}")
         sys.exit(1)
     
-    # Create experiment runner with relative config path for backward compatibility
-    runner = ExperimentRunner(config_file="experiment_config.yaml")
-    
     try:
-        # Get modes from config
+        # Get algorithms and modes from config
+        algorithms = config.get('algorithms', ['DQN'])
         modes = config.get('modes', ['per_instance'])
         
-        # Prepare datasets first
-        print("Preparing datasets...")
-        runner.prepare_datasets()
+        # Create list of all algorithm-mode combinations
+        experiment_combinations = []
+        for algorithm in algorithms:
+            for mode in modes:
+                experiment_combinations.append((algorithm, mode))
         
-        # Calculate total tasks for progress tracking
-        runner._calculate_total_tasks()
+        print(f"\n" + "="*60)
+        print("PARALLEL EXPERIMENT EXECUTION")
+        print("="*60)
+        print(f"Total experiment combinations: {len(experiment_combinations)}")
+        print(f"Algorithm-Mode combinations: {experiment_combinations}")
         
-        # Run experiments based on configured modes
-        for mode in modes:
-            if mode == "per_instance":
-                print("Running per-instance experiments...")
-                runner.run_per_instance_mode()
+        # Determine number of parallel workers (don't exceed CPU count)
+        max_workers = min(len(experiment_combinations), cpu_count())
+        print(f"Using {max_workers} parallel workers")
+        print(f"Available CPU cores: {cpu_count()}")
+        print("\nStarting parallel execution...\n")
+        
+        # Create shared progress dictionary for monitoring
+        manager = Manager()
+        progress_dict = manager.dict()
+        
+        # Start progress monitoring thread
+        stop_event = threading.Event()
+        progress_thread = threading.Thread(target=monitor_progress, args=(progress_dict, stop_event))
+        progress_thread.daemon = True
+        progress_thread.start()
+        
+        # Run experiments in parallel
+        completed_experiments = []
+        failed_experiments = []
+        
+        try:
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all experiments with startup notification
+                future_to_experiment = {}
+                for algorithm, mode in experiment_combinations:
+                    print(f"[SUBMIT] Queuing experiment: {algorithm} - {mode}")
+                    future = executor.submit(run_single_experiment, algorithm, mode, "experiment_config.yaml", progress_dict)
+                    future_to_experiment[future] = (algorithm, mode)
                 
-            elif mode == "cross_instance":
-                print("Running cross-instance experiments...")
-                runner.run_cross_instance_mode()
-
+                print(f"\n[STATUS] All {len(experiment_combinations)} experiments queued and starting...\n")
                 
-        # Analyze results
-        analysis = runner.logger.analyze_results()
-        runner.logger.save_experiment_summary(analysis)
+                # Process completed experiments with progress tracking
+                completed_count = 0
+                for future in as_completed(future_to_experiment):
+                    algorithm, mode = future_to_experiment[future]
+                    try:
+                        result = future.result()
+                        completed_count += 1
+                        
+                        # Remove completed task from progress dict
+                        task_id = f"{algorithm}-{mode}"
+                        if task_id in progress_dict:
+                            del progress_dict[task_id]
+                        
+                        progress_pct = (completed_count / len(experiment_combinations)) * 100
+                        status_msg = f"[PROGRESS] {completed_count}/{len(experiment_combinations)} ({progress_pct:.1f}%) - {result}"
+                        print(status_msg)
+                        
+                        if "Completed" in result:
+                            completed_experiments.append((algorithm, mode))
+                        else:
+                            failed_experiments.append((algorithm, mode, result))
+                    except Exception as e:
+                        completed_count += 1
+                        
+                        # Remove failed task from progress dict
+                        task_id = f"{algorithm}-{mode}"
+                        if task_id in progress_dict:
+                            del progress_dict[task_id]
+                        
+                        progress_pct = (completed_count / len(experiment_combinations)) * 100
+                        error_msg = f"Exception in {algorithm} - {mode}: {str(e)}"
+                        status_msg = f"[PROGRESS] {completed_count}/{len(experiment_combinations)} ({progress_pct:.1f}%) - {error_msg}"
+                        print(status_msg)
+                        failed_experiments.append((algorithm, mode, error_msg))
         
-        print("All experiments completed successfully!")
+        finally:
+            # Stop progress monitoring
+            stop_event.set()
+            progress_thread.join(timeout=1)
+        
+        # Print final progress table
+        print_progress_table(progress_dict)
+        
+        # Report final results
+        print("\n" + "="*60)
+        print("PARALLEL EXECUTION SUMMARY")
+        print("="*60)
+        print(f"Total experiments: {len(experiment_combinations)}")
+        print(f"Completed successfully: {len(completed_experiments)}")
+        print(f"Failed: {len(failed_experiments)}")
+        
+        if completed_experiments:
+            print("\nCompleted experiments:")
+            for algo, mode in completed_experiments:
+                print(f"  ✓ {algo} - {mode}")
+        
+        if failed_experiments:
+            print("\nFailed experiments:")
+            for algo, mode, error in failed_experiments:
+                print(f"  ✗ {algo} - {mode}: {error}")
+        
+        if failed_experiments:
+            print("\nSome experiments failed. Check logs for details.")
+            sys.exit(1)
+        else:
+            print("\nAll experiments completed successfully!")
         
     except KeyboardInterrupt:
         print("\nExperiment interrupted by user")
