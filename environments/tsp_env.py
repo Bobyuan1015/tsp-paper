@@ -304,7 +304,7 @@ class TSPEnvironment:
             if action in self.visited:
                 # Invalid action - choose random unvisited city
                 unvisited = [i for i in range(self.n_cities) if i not in self.visited]
-                action = random.choice(unvisited) if unvisited else 0
+                action = int(random.choice(unvisited)) if unvisited else 0
 
         # Calculate reward (negative distance)
         distance = self.distance_matrix[self.current_city, action]
