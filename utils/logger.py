@@ -2,6 +2,7 @@ import os
 import logging
 import csv
 import json
+import traceback
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import pandas as pd
@@ -30,7 +31,7 @@ class Logger:
             save_to_file: Whether to save logs to file
             console_output: Whether to output logs to console
         """
-        self.buffer_size = 1000  # 缓存1000条记录再写入
+        self.buffer_size = 100  # 缓存1000条记录再写入
         self.csv_buffer = []
 
         self.experiment_name = experiment_name
@@ -39,10 +40,8 @@ class Logger:
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Create experiment directory with algorithm and mode in path
-        if algorithm and mode:
-            dir_name = f"{experiment_name}_{algorithm}_{mode}_{self.timestamp}"
-        else:
-            dir_name = f"{experiment_name}_{self.timestamp}"
+
+        dir_name = f"{experiment_name}_{self.timestamp}"
         
         self.experiment_dir = os.path.join(project_root, "results", dir_name)
         os.makedirs(self.experiment_dir, exist_ok=True)
@@ -56,14 +55,11 @@ class Logger:
             'algorithm', 'city_num', 'mode', 'instance_id', 'run_id', 'state_type',
             'train_test', 'episode', 'step', 'action', 'state', 'done', 'reward', 
             'loss', 'total_reward', 'current_distance','optimal_distance','optimal_path',
-            'coordinates', 'state_values', 'timestamp'
+            'state_values', 'timestamp'
         ]
         
         # Initialize CSV file with algorithm and mode in filename
-        if algorithm and mode:
-            csv_filename = f"{algorithm}_{mode}_experiment_data_{self.timestamp}.csv"
-        else:
-            csv_filename = f"experiment_data_{self.timestamp}.csv"
+        csv_filename = f"experiment_data_{self.timestamp}.csv"
         
         self.csv_file = os.path.join(self.experiment_dir, csv_filename)
         self._init_csv_file()
@@ -189,7 +185,6 @@ class Logger:
                 state_json[key] = value.tolist()
         
         # Format coordinates and state_values as JSON strings
-        coordinates_json = json.dumps(coordinates) if coordinates is not None else ''
         state_values_json = json.dumps(state_values) if state_values is not None else ''
         
         # Create row data
@@ -197,7 +192,7 @@ class Logger:
             algorithm, city_num, mode, instance_id, run_id, state_type,
             train_test, episode, step, action, json.dumps(state_json), 
             int(done), reward, loss or '', total_reward or '', current_distance,optimal_distance, optimal_path,
-            coordinates_json, state_values_json, datetime.now().isoformat()
+            state_values_json, datetime.now().isoformat()
         ]
         self.csv_buffer.append(row_data)
         # 达到缓存大小时批量写入
@@ -307,7 +302,7 @@ class Logger:
                 })
                 self.progress_dict[self.task_key] = progress_data
             except Exception as e:
-                self.logger.warning(f"Failed to update progress_dict: {e}")
+                self.logger.warning(f"Failed to update progress_dict: {e} {traceback.format_exc()}")
         
         self.logger.info(progress_msg)
     
@@ -397,7 +392,7 @@ class Logger:
             return analysis
             
         except Exception as e:
-            self.logger.error(f"Error analyzing results: {e}")
+            self.logger.error(f"Error analyzing results: {e} {traceback.format_exc()}")
             return {}
     
     def get_experiment_dir(self) -> str:

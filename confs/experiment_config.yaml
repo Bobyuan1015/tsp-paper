@@ -17,13 +17,13 @@ dataset:
   
 # Training Configuration
 training:
-  episodes_per_instance: 10000     # Episodes per instance in per-instance mode
-  episodes_cross_instance: 100000  # Total episodes in cross-instance mode
-  repeat_runs: 5                  # Number of independent runs per experiment
+  episodes_per_instance: 1000     # Episodes per instance in per-instance mode
+  episodes_cross_instance: 2000  # Total episodes in cross-instance mode
+  repeat_runs: 6                  # Number of independent runs per experiment
   batch_size: 4
   learning_rate: 0.001
   save_model_every: 100          # Save model every N episodes
-  evaluate_every: 100            # Evaluate agent every N episodes
+  evaluate_every: 2000            # Evaluate agent every N episodes
   
 # State Representation Types
 state_types:

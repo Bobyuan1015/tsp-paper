@@ -18,6 +18,8 @@ PyYAML>=6.0
 scikit-learn>=1.1.0
 seaborn
 plotly
+dask
+pyarrow
 
 # pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 # Optional: For better performance

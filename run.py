@@ -277,7 +277,8 @@ class ExperimentRunner:
                                   test_data: List, repeat_runs: int, episodes_training: int,
                                   save_model_every: int, evaluate_every: int):
         """Handle per-instance training logic."""
-        # Per-instance training  
+        # Per-instance training
+        pre_instance_id =pre_i =pre_optimal_distance=0
         for instance_id in range(len(train_data)):
             instance_data = train_data[instance_id]
             
@@ -322,37 +323,42 @@ class ExperimentRunner:
                 model_manager = ModelManager(model_dir, keep_recent=10)
                 
                 # Train on single instance
+                if pre_instance_id==instance_id  and pre_optimal_distance !=env.optimal_distance:
+                    print()
                 self._train_agent(
                     agent, env, episodes_training, algorithm, 
                     city_num, "per_instance", instance_id, run_id, 
                     state_type, "train", model_manager, 
                     save_model_every, evaluate_every,state_components
                 )
+                pre_optimal_distance=env.optimal_distance
+                pre_i= run_id
+                pre_instance_id = instance_id
         
                 # Zero-shot testing on test instances
-                for instance_id in range(len(test_data)):
-                    instance_data = test_data[instance_id]
+                for test_instance_id in range(len(test_data)):
+                    test_instance_data = test_data[test_instance_id]
                     self.completed_tasks += 1
                     
-                    test_progress = ((instance_id + 1) / len(test_data)) * 100
-                    self.logger.logger.info(f"Testing instance {instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
+                    test_progress = ((test_instance_id + 1) / len(test_data)) * 100
+                    self.logger.logger.info(f"Testing instance {test_instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
                     
                     # Log testing progress
                     self.logger.log_experiment_progress(
                         algorithm, city_num, "per_instance_testing",
-                        instance_id + 1, len(test_data), 1, 1,
+                        test_instance_id + 1, len(test_data), 1, 1,
                         self.completed_tasks, self.total_tasks
                     )
                     
                     # Create fresh environment and agent for zero-shot test
                     env = self.dataset_loader.create_env_from_instance(
-                        instance_data, state_components
+                        test_instance_data, state_components
                     )
 
-                    # Zero-shot test (single episode with untrained agent)
+                    # Zero-shot test (single episode with trained agent using best model)
                     self._zero_shot_test(
                         agent, env, algorithm, city_num, "per_instance",
-                        instance_id, run_id, state_type, "test"
+                        test_instance_id, run_id, state_type, "test", model_manager
                     )
 
     def _run_cross_instance_training(self, algorithm: str, city_num: int, state_type: str,
@@ -413,7 +419,7 @@ class ExperimentRunner:
                 # Use _zero_shot_test to ensure detailed step logging to CSV
                 self._zero_shot_test(
                     agent, env, algorithm, city_num, "cross_instance", 
-                    instance_id, run_id, state_type, "test"
+                    instance_id, run_id, state_type, "test", model_manager
                 )
 
     def run_per_instance_mode(self):
@@ -482,6 +488,9 @@ class ExperimentRunner:
                 step += 1
                 
                 if done:
+
+                    # if episode <10:
+                    #     print(f'yf episode={episode}',state['path_sequence'],env.total_distance)
                     break
                 
                 state = next_state
@@ -532,8 +541,13 @@ class ExperimentRunner:
 
     def _zero_shot_test(self, agent, env, algorithm: str, city_num: int, 
                        mode: str, instance_id: int, run_id: int, state_type: str, 
-                       train_test: str):
+                       train_test: str, model_manager=None):
         """Perform test with agent (trained or untrained) and log detailed steps to CSV."""
+        # Load the best model if model_manager is provided and has a best model
+        if model_manager is not None and model_manager.get_best_model_path() is not None:
+            self.logger.logger.info(f"Loading best model for zero-shot testing: {model_manager.get_best_model_path()}")
+            model_manager.load_best_model(agent)
+        
         state = env.reset()
         agent.reset_episode()
         
@@ -642,7 +656,7 @@ def run_single_experiment(algorithm: str, mode: str, config_file: str = "experim
             progress_dict[task_key]["status"] = "failed"
         
         error_msg = f"Failed: {algorithm} - {mode}: {str(e)}"
-        print(f"[{algorithm}-{mode}] ERROR: {str(e)}")
+        print(f"[{algorithm}-{mode}] ERROR: {str(e)} {traceback.format_exc()}")
         return error_msg
 
 
@@ -695,14 +709,17 @@ def print_progress_table(progress_dict):
 def monitor_progress(progress_dict, stop_event):
     """Background thread to monitor and display progress."""
     while not stop_event.is_set():
-        time.sleep(10)  # Update every 10 seconds
+        time.sleep(20)  # Update every 10 seconds
         if progress_dict:
             print_progress_table(progress_dict)
 
 
 def main():
     """Main function to run experiments with parallel execution by algorithm and mode."""
-
+    
+    # 进程模式控制开关: True=单进程, False=多进程
+    USE_SINGLE_PROCESS = False
+    
     # Load configuration from YAML file (for backward compatibility)
     config_path = "confs/experiment_config.yaml"
     
@@ -733,11 +750,17 @@ def main():
         print(f"Total experiment combinations: {len(experiment_combinations)}")
         print(f"Algorithm-Mode combinations: {experiment_combinations}")
         
-        # Determine number of parallel workers (don't exceed CPU count)
-        max_workers = min(len(experiment_combinations), cpu_count())
-        print(f"Using {max_workers} parallel workers")
+        # Determine number of parallel workers based on mode
+        if USE_SINGLE_PROCESS:
+            max_workers = 1
+            print(f"Using single-process mode (max_workers = 1)")
+        else:
+            max_workers = min(len(experiment_combinations), cpu_count())
+            print(f"Using multi-process mode (max_workers = {max_workers})")
+        
         print(f"Available CPU cores: {cpu_count()}")
-        print("\nStarting parallel execution...\n")
+        print(f"Total experiment combinations: {len(experiment_combinations)}")
+        print("\nStarting execution...\n")
         
         # Create shared progress dictionary for monitoring
         manager = Manager()
@@ -786,6 +809,7 @@ def main():
                         else:
                             failed_experiments.append((algorithm, mode, result))
                     except Exception as e:
+                        print(f"主进程异常 {traceback.format_exc()}")
                         completed_count += 1
                         
                         # Remove failed task from progress dict

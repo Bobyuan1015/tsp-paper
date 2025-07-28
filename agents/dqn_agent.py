@@ -160,7 +160,7 @@ class DQNAgent(BaseAgent):
         # Epsilon-greedy action selection
         if training and random.random() < self.epsilon:
             # Random action from valid actions
-            action = np.random.choice(valid_actions)
+            action = int(np.random.choice(valid_actions))
         else:
             # Greedy action using Q-network
             state_tensor = torch.FloatTensor(self._state_to_tensor(state)).unsqueeze(0).to(self.device)

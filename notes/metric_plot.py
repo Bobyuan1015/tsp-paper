@@ -15,7 +15,7 @@ from itertools import combinations
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from confs import project_root
+
 
 warnings.filterwarnings('ignore')
 
@@ -187,7 +187,7 @@ def build_state_combinations():
 
 # 全局映射关系
 map_state_types = build_state_combinations()
-
+full_states = ["current_city_onehot", "visited_mask", "order_embedding", "distances_from_current"]
 
 
 class TSPAdvancedAblationAnalyzer:
@@ -196,7 +196,6 @@ class TSPAdvancedAblationAnalyzer:
     def __init__(self, df: pd.DataFrame):
         self.df = df
         self.results = {}
-        self.base_states = ["current_city_onehot", "visited_mask", "order_embedding", "distances_from_current"]
 
     def calculate_performance_metrics(self) -> pd.DataFrame:
         """计算核心性能指标"""
@@ -208,15 +207,54 @@ class TSPAdvancedAblationAnalyzer:
                 episode_data['optimal_distance'] * 100
         )
 
-        metrics = episode_data.groupby(['algorithm', 'city_num', 'mode', 'state_type', 'train_test']).agg({
-            'optimality_gap': ['mean', 'std', 'count'],
-            'total_reward': ['mean', 'std'],
-            'episode': ['max', 'mean'],
-            'current_distance': ['mean', 'min', 'max']
+        # 第一次分组聚合，并设置列名前缀为 "instance_"
+        instance_metrics = episode_data.groupby(
+            ['algorithm', 'city_num', 'mode', 'state_type', 'train_test', 'instance_id']).agg({
+            'optimality_gap': ['mean', 'std', 'max', 'min', 'count'],
+            'total_reward': ['mean', 'std', 'max', 'min', 'count'],
         }).round(4)
 
-        metrics.columns = ['_'.join(col).strip() for col in metrics.columns.values]
+        # 重构列名，将多级列名展平并添加 "instance_" 前缀
+        instance_metrics.columns = ['instance_' + '_'.join(col).strip() for col in instance_metrics.columns.values]
+
+        # 重置索引，使分组列变为普通列
+        instance_metrics = instance_metrics.reset_index()
+
+        # 第二次分组聚合
+        # 首先获取所有以 "instance_" 开头的列名
+        instance_columns = [col for col in instance_metrics.columns if col.startswith('instance_') and col != 'instance_id']
+
+        # 构建第二次聚合的字典
+        agg_dict = {}
+        for col in instance_columns:
+            agg_dict[col] = ['mean', 'std', 'max', 'min', 'count']
+
+        # 进行第二次分组聚合
+        metrics = instance_metrics.groupby(['algorithm', 'city_num', 'mode', 'state_type', 'train_test']).agg(
+            agg_dict).round(4)
+
+        # 重构最终列名
+        final_columns = []
+        for col in metrics.columns.values:
+            if col[0].startswith('instance_optimality_gap'):
+                # 从 instance_optimality_gap_xxx 提取后面的部分，然后与聚合函数组合
+                original_metric = col[0].replace('instance_', '').split('_')[0] + '_' + \
+                                  col[0].replace('instance_', '').split('_')[1]  # optimality_gap
+                final_columns.append(f"optimality_gap_{col[1]}")
+            elif col[0].startswith('instance_total_reward'):
+                # 从 instance_total_reward_xxx 提取后面的部分，然后与聚合函数组合
+                final_columns.append(f"total_reward_{col[1]}")
+            else:
+                # 其他情况保持原样或根据需要处理
+                final_columns.append('_'.join(col).strip())
+
+        metrics.columns = final_columns
+
+        # 重置索引
         metrics = metrics.reset_index()
+
+
+        # metrics = metrics.compute()
 
         return metrics
 
@@ -307,17 +345,17 @@ class TSPAdvancedAblationAnalyzer:
 
         return significance
 
-    def calculate_component_contributions(self) -> pd.DataFrame:
+    def calculate_component_contributions(self,metrics) -> pd.DataFrame:
         """高级组件贡献度分析 - 基于消融实验理论"""
         print("执行高级组件贡献度分析...")
-
-        metrics = self.calculate_performance_metrics()
+        if not metrics:
+            metrics = self.calculate_performance_metrics()
         contributions = []
 
-        for algorithm in self.df['algorithm'].unique():
-            for city_num in self.df['city_num'].unique():
-                for mode in self.df['mode'].unique():
-                    for train_test in self.df['train_test'].unique():
+        for algorithm in metrics['algorithm'].unique():
+            for city_num in metrics['city_num'].unique():
+                for mode in metrics['mode'].unique():
+                    for train_test in metrics['train_test'].unique():
 
                         subset = metrics[
                             (metrics['algorithm'] == algorithm) &
@@ -408,7 +446,7 @@ class TSPAdvancedAblationAnalyzer:
         full_perf = performance_dict.get('full', 0)
 
         # 计算单组件移除的影响
-        for component in self.base_states:
+        for component in full_states:
             remove_key = f'ablation_remove_{component.split("_")[0]}'
             if remove_key in performance_dict:
                 # 边际贡献 = 移除该组件后的性能下降
@@ -440,8 +478,8 @@ class TSPAdvancedAblationAnalyzer:
         full_perf = performance_dict.get('full', 0)
 
         # 计算两两组件的交互效应
-        for i, comp1 in enumerate(self.base_states):
-            for j, comp2 in enumerate(self.base_states[i + 1:], i + 1):
+        for i, comp1 in enumerate(full_states):
+            for j, comp2 in enumerate(full_states[i + 1:], i + 1):
                 comp1_short = comp1.split("_")[0]
                 comp2_short = comp2.split("_")[0]
 
@@ -484,7 +522,7 @@ class TSPAdvancedAblationAnalyzer:
         full_perf = performance_dict.get('full', 0)
         component_impacts = {}
 
-        for component in self.base_states:
+        for component in full_states:
             remove_key = f'ablation_remove_{component.split("_")[0]}'
             if remove_key in performance_dict:
                 impact = performance_dict[remove_key] - full_perf
@@ -611,23 +649,26 @@ class TSPAdvancedAblationAnalyzer:
 
         return best_match
 
-    def calculate_ablation_pathway_analysis(self, performance_better_when='smaller') -> pd.DataFrame:
+    def calculate_ablation_pathway_analysis(self, performance_better_when='smaller', metrics=None) -> pd.DataFrame:
         """
         消融路径分析
         Args:
             performance_better_when (str):
                 - 'smaller': 性能指标越小越好（如TSP的optimality_gap, distance）
                 - 'larger': 性能指标越大越好（如reward, accuracy）
+            metrics (pd.DataFrame, optional): 预计算的性能指标数据。如果为None，则使用self.df计算
         """
         print(f"执行消融路径分析... (性能指标: {performance_better_when} is better)")
 
-        metrics = self.calculate_performance_metrics()
+        if metrics is None:
+            return None
+        
         pathway_analysis = []
 
-        for algorithm in self.df['algorithm'].unique():
-            for city_num in self.df['city_num'].unique():
-                for mode in self.df['mode'].unique():
-                    for train_test in self.df['train_test'].unique():
+        for algorithm in metrics['algorithm'].unique():
+            for city_num in metrics['city_num'].unique():
+                for mode in metrics['mode'].unique():
+                    for train_test in metrics['train_test'].unique():
 
                         subset = metrics[
                             (metrics['algorithm'] == algorithm) &
@@ -652,90 +693,69 @@ class TSPAdvancedAblationAnalyzer:
 
                         # 处理新的路径结构
                         for pathway_name, pathway_data in pathways.items():
-                            if pathway_name == 'pathway_statistics':
-                                # 处理统计信息
-                                result = {
-                                    'algorithm': algorithm,
-                                    'city_num': city_num,
-                                    'mode': mode,
-                                    'train_test': train_test,
-                                    'pathway_name': 'statistics',
-                                    'pathway_type': 'summary',
-                                    'num_available_combinations': pathway_data.get('num_available_combinations', 0),
-                                    'max_components_removed': pathway_data.get('max_components_removed', 0),
-                                    'average_single_step_degradation': pathway_data.get(
-                                        'average_single_step_degradation', 0),
-                                    'pathway_length': 0,
-                                    'total_degradation': 0,
-                                    'max_single_step_degradation': 0,
-                                    'min_single_step_degradation': 0,
-                                    'degradation_variance': 0,
-                                    'pathway_efficiency': 0
-                                }
-                                pathway_analysis.append(result)
+
+                            # 处理具体路径数据
+                            pathway_performance = pathway_data.get('pathway_performance', []) # 首元素为 full状态的performance
+                            degradation_rates = pathway_data.get('degradation_rate', [])
+                            total_degradation = pathway_data.get('total_degradation', 0)
+
+                            # 计算路径特征指标
+                            pathway_length = len(pathway_performance)
+                            max_degradation = max(degradation_rates) if degradation_rates else 0
+                            min_degradation = min(degradation_rates) if degradation_rates else 0
+                            degradation_variance = np.var(degradation_rates) if degradation_rates else 0
+
+                            # 路径效率：总退化/路径长度
+                            pathway_efficiency = abs(total_degradation) / max(pathway_length - 1,
+                                                                              1) if pathway_length > 1 else 0
+
+                            result = {
+                                'algorithm': algorithm,
+                                'city_num': city_num,
+                                'mode': mode,
+                                'train_test': train_test,
+                                'pathway_name': pathway_name,
+                                'pathway_type': 'ablation_sequence',
+                                'pathway_length': pathway_length,
+                                'total_degradation': total_degradation,
+                                'max_single_step_degradation': max_degradation,
+                                'min_single_step_degradation': min_degradation,
+                                'degradation_variance': degradation_variance,
+                                'pathway_efficiency': pathway_efficiency,
+                                'pathway_performance_list': str(pathway_performance),  # 转为字符串存储
+                                'degradation_rate_list': str(degradation_rates),
+                                'pathway_description': pathway_data.get('pathway_description', ''),
+                                # 添加统计信息的默认值
+                                'num_available_combinations': 0,
+                                'max_components_removed': 0,
+                                'average_single_step_degradation': np.mean(
+                                    degradation_rates) if degradation_rates else 0
+                            }
+
+                            # 如果有组件信息，添加组件分析
+                            if 'pathway_components' in pathway_data:
+                                components_info = pathway_data['pathway_components']
+                                result['pathway_components'] = str(components_info)
+
+                                # 分析组件移除模式
+                                if components_info:
+                                    # 计算每步新增移除的组件数
+                                    step_removals = []
+                                    prev_count = 0
+                                    for step_components in components_info:
+                                        current_count = len(step_components)
+                                        step_removals.append(current_count - prev_count)
+                                        prev_count = current_count
+
+                                    result['removal_pattern'] = str(step_removals)
+                                    result['final_components_removed'] = len(
+                                        components_info[-1]) if components_info else 0
                             else:
-                                # 处理具体路径数据
-                                pathway_performance = pathway_data.get('pathway_performance', []) # 首元素为 full状态的performance
-                                degradation_rates = pathway_data.get('degradation_rate', [])
-                                total_degradation = pathway_data.get('total_degradation', 0)
+                                result['pathway_components'] = ''
+                                result['removal_pattern'] = ''
+                                result['final_components_removed'] = 0
 
-                                # 计算路径特征指标
-                                pathway_length = len(pathway_performance)
-                                max_degradation = max(degradation_rates) if degradation_rates else 0
-                                min_degradation = min(degradation_rates) if degradation_rates else 0
-                                degradation_variance = np.var(degradation_rates) if degradation_rates else 0
-
-                                # 路径效率：总退化/路径长度
-                                pathway_efficiency = abs(total_degradation) / max(pathway_length - 1,
-                                                                                  1) if pathway_length > 1 else 0
-
-                                result = {
-                                    'algorithm': algorithm,
-                                    'city_num': city_num,
-                                    'mode': mode,
-                                    'train_test': train_test,
-                                    'pathway_name': pathway_name,
-                                    'pathway_type': 'ablation_sequence',
-                                    'pathway_length': pathway_length,
-                                    'total_degradation': total_degradation,
-                                    'max_single_step_degradation': max_degradation,
-                                    'min_single_step_degradation': min_degradation,
-                                    'degradation_variance': degradation_variance,
-                                    'pathway_efficiency': pathway_efficiency,
-                                    'pathway_performance_list': str(pathway_performance),  # 转为字符串存储
-                                    'degradation_rate_list': str(degradation_rates),
-                                    'pathway_description': pathway_data.get('pathway_description', ''),
-                                    # 添加统计信息的默认值
-                                    'num_available_combinations': 0,
-                                    'max_components_removed': 0,
-                                    'average_single_step_degradation': np.mean(
-                                        degradation_rates) if degradation_rates else 0
-                                }
-
-                                # 如果有组件信息，添加组件分析
-                                if 'pathway_components' in pathway_data:
-                                    components_info = pathway_data['pathway_components']
-                                    result['pathway_components'] = str(components_info)
-
-                                    # 分析组件移除模式
-                                    if components_info:
-                                        # 计算每步新增移除的组件数
-                                        step_removals = []
-                                        prev_count = 0
-                                        for step_components in components_info:
-                                            current_count = len(step_components)
-                                            step_removals.append(current_count - prev_count)
-                                            prev_count = current_count
-
-                                        result['removal_pattern'] = str(step_removals)
-                                        result['final_components_removed'] = len(
-                                            components_info[-1]) if components_info else 0
-                                else:
-                                    result['pathway_components'] = ''
-                                    result['removal_pattern'] = ''
-                                    result['final_components_removed'] = 0
-
-                                pathway_analysis.append(result)
+                            pathway_analysis.append(result)
 
         return pd.DataFrame(pathway_analysis)
 
@@ -743,10 +763,10 @@ class TSPAdvancedAblationAnalyzer:
 class TSPAdvancedVisualizationSuite:
     """高级TSP可视化套件 - 博士水准"""
 
-    def __init__(self, analyzer: TSPAdvancedAblationAnalyzer):
-        self.analyzer = analyzer
-        self.contributions = analyzer.calculate_component_contributions()
-        self.performance_metrics = analyzer.calculate_performance_metrics()
+    def __init__(self, contributions,performance_metrics):
+
+        self.contributions = contributions
+        self.performance_metrics = performance_metrics
 
         # 设置学术图表样式 - 修正了样式名称
         sns.set_style("whitegrid")
@@ -755,17 +775,17 @@ class TSPAdvancedVisualizationSuite:
     def _get_dynamic_colors(self, n_colors, color_type='qualitative'):
         """
         动态获取无重复且有明显区分度的颜色
-        
+
         Args:
             n_colors: 需要的颜色数量
             color_type: 颜色类型 ('qualitative', 'sequential', 'diverging')
-        
+
         Returns:
             list: 颜色列表
         """
         if n_colors == 0:
             return []
-        
+
         if color_type == 'qualitative':
             # 高对比度颜色列表，确保区分度
             high_contrast_colors = [
@@ -790,36 +810,36 @@ class TSPAdvancedVisualizationSuite:
                 '#B22222',  # 火砖红
                 '#00FF7F'   # 春绿色
             ]
-            
+
             if n_colors <= len(high_contrast_colors):
                 return high_contrast_colors[:n_colors]
-            
+
             # 如果需要更多颜色，使用HSV色彩空间生成
             colors = high_contrast_colors.copy()
             remaining = n_colors - len(colors)
-            
+
             for i in range(remaining):
                 hue = (i * 137.508) % 360  # 黄金角度，确保颜色分散
                 saturation = 0.8 + 0.2 * (i % 2)  # 在0.8-1.0之间交替
                 value = 0.7 + 0.3 * ((i // 2) % 2)  # 在0.7-1.0之间交替
-                
+
                 # HSV转RGB
                 import colorsys
                 rgb = colorsys.hsv_to_rgb(hue/360, saturation, value)
                 hex_color = '#{:02x}{:02x}{:02x}'.format(
                     int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
                 colors.append(hex_color)
-            
+
             return colors[:n_colors]
-        
+
         elif color_type == 'sequential':
             # 顺序颜色，适用于数值渐变
             return sns.color_palette("viridis", n_colors)
-        
+
         elif color_type == 'diverging':
             # 发散颜色，适用于正负值对比
             return sns.color_palette("RdBu_r", n_colors)
-        
+
         else:
             # 默认返回qualitative
             return self._get_dynamic_colors(n_colors, 'qualitative')
@@ -965,7 +985,7 @@ class TSPAdvancedVisualizationSuite:
 
             plt.tight_layout()
             plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            plt.show()
+            # plt.show()
 
             # 打印详细的数据分析结果
             print("\n" + "=" * 60)
@@ -999,7 +1019,7 @@ class TSPAdvancedVisualizationSuite:
             ax.set_title('Component Contribution Radar Chart - Error', fontsize=14)
             ax.axis('off')
             plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            plt.show()
+            # plt.show()
 
     def generate_advanced_summary_report(self):
         """生成高级总结报告"""
@@ -1010,14 +1030,14 @@ class TSPAdvancedVisualizationSuite:
         # 实验设计概述
         print(f"\n📊 实验设计概述:")
         print(f"├─ 状态组合总数: {len(map_state_types)} 种")
-        print(f"├─ 基础状态组件: {', '.join(self.analyzer.base_states)}")
+        print(f"├─ 基础状态组件: {', '.join(full_states)}")
         print(f"├─ 消融策略: 系统性单组件/双组件移除")
         print(f"└─ 数据集规模: {len(self.analyzer.df):,} 条记录")
 
         # 状态组合详细信息
         print(f"\n🔬 消融实验状态组合:")
         for state_type, components in map_state_types.items():
-            missing_components = set(self.analyzer.base_states) - set(components)
+            missing_components = set(full_states) - set(components)
             if missing_components:
                 print(f"├─ {state_type}: 移除 {', '.join(missing_components)}")
             else:
@@ -1073,25 +1093,77 @@ class TSPAdvancedVisualizationSuite:
         print(" " * 35 + "实验分析完成 - 博士水准消融研究")
         print("=" * 100)
 
-
+    #
+    # def plot_comprehensive_ablation_analysis(self, pathway_analysis=None):
+    #     """绘制综合消融分析图 - 统一以groupby为单位进行绘制"""
+    #     print("绘制综合消融分析图...")
+    #
+    #     # 按['algorithm', 'city_num', 'mode', 'train_test']分组
+    #     grouped_data = self.contributions.groupby(['algorithm', 'city_num', 'mode', 'train_test'])
+    #
+    #     plot_count = 0
+    #     for group_name, group_data in grouped_data:
+    #         if plot_count >= 6:  # 最多绘制6个组
+    #             break
+    #
+    #         print(f"处理组合: {group_name}")
+    #
+    #         # 为每个组合创建一个大图
+    #         fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+    #         fig.suptitle(f'{group_name[0]} | {group_name[1]} | {group_name[2]} |  {group_name[3]}',
+    #                     fontsize=16, fontweight='bold')
+    #
+    #
+    #         try:
+    #             # 1. 组件边际贡献分析
+    #             self._plot_marginal_contributions_for_group(axes[0, 0], group_data)
+    #
+    #             # 2. 组件交互效应热力图
+    #             self._plot_interaction_heatmap_for_group(axes[0, 1], group_data)
+    #
+    #             # 3. 统计显著性检验结果
+    #             self._plot_significance_tests_for_group(axes[0, 2], group_data)
+    #
+    #             # 4. 消融路径比较
+    #             self._plot_ablation_pathways_comparison_for_group(axes[1, 0], group_data, pathway_analysis)
+    #
+    #             # 5. 组件重要性排序
+    #             self._plot_importance_ranking_for_group(axes[1, 1], group_data)
+    #
+    #             # 6. 性能退化分析
+    #             self._plot_degradation_from_pathway_data_for_group(axes[1, 2], group_data, pathway_analysis)
+    #
+    #             plt.tight_layout()
+    #
+    #             # 保存每个组合的图片
+    #             filename = f'comprehensive_ablation_analysis_{group_name[0]}_{group_name[1]}_{group_name[2]}_{group_name[3]}.png'
+    #             plt.savefig(filename, dpi=300, bbox_inches='tight')
+    #             # plt.show()
+    #             break
+    #             plot_count += 1
+    #
+    #         except Exception as e:
+    #             print(f"绘制组合 {group_name} 时出现错误: {e} {traceback.format_exc()} ")
+    #             plt.close()
+    #             continue
     def plot_comprehensive_ablation_analysis(self, pathway_analysis=None):
         """绘制综合消融分析图 - 统一以groupby为单位进行绘制"""
         print("绘制综合消融分析图...")
 
         # 按['algorithm', 'city_num', 'mode', 'train_test']分组
         grouped_data = self.contributions.groupby(['algorithm', 'city_num', 'mode', 'train_test'])
-        
+
         plot_count = 0
         for group_name, group_data in grouped_data:
             if plot_count >= 6:  # 最多绘制6个组
                 break
-                
+
             print(f"处理组合: {group_name}")
-            
+
             # 为每个组合创建一个大图
-            fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+            fig, axes = plt.subplots(3, 2, figsize=(30, 24))  # 修改为 3x2 布局，增大画布尺寸以减少拥挤
             fig.suptitle(f'{group_name[0]} | {group_name[1]} | {group_name[2]} |  {group_name[3]}',
-                        fontsize=16, fontweight='bold')
+                         fontsize=16, fontweight='bold')
 
             try:
                 # 1. 组件边际贡献分析
@@ -1101,19 +1173,28 @@ class TSPAdvancedVisualizationSuite:
                 self._plot_interaction_heatmap_for_group(axes[0, 1], group_data)
 
                 # 3. 统计显著性检验结果
-                self._plot_significance_tests_for_group(axes[0, 2], group_data)
+                self._plot_significance_tests_for_group(axes[1, 0], group_data)
 
                 # 4. 消融路径比较
-                self._plot_ablation_pathways_comparison_for_group(axes[1, 0], group_data, pathway_analysis)
+                self._plot_ablation_pathways_comparison_for_group(axes[1, 1], group_data, pathway_analysis)
 
                 # 5. 组件重要性排序
-                self._plot_importance_ranking_for_group(axes[1, 1], group_data)
+                self._plot_importance_ranking_for_group(axes[2, 0], group_data)
 
                 # 6. 性能退化分析
-                self._plot_degradation_from_pathway_data_for_group(axes[1, 2], group_data, pathway_analysis)
+                self._plot_degradation_from_pathway_data_for_group(axes[2, 1], group_data, pathway_analysis)
+
+                # 修改标题字体大小和 pad 值以避免重叠
+                axes[0, 0].set_title('Component Marginal Contributions', fontsize=12, fontweight='bold', pad=20)
+                axes[0, 1].set_title('Component Interaction Effects', fontsize=12, fontweight='bold', pad=20)
+                axes[1, 0].set_title('Statistical Significance Tests', fontsize=12, fontweight='bold', pad=20)
+                axes[1, 1].set_title('Ablation Pathway Comparison', fontsize=12, fontweight='bold', pad=20)
+                axes[2, 0].set_title('Component Importance Ranking', fontsize=12, fontweight='bold', pad=20)
+                axes[2, 1].set_title('Performance Degradation Analysis', fontsize=12, fontweight='bold', pad=20)
 
                 plt.tight_layout()
-                
+                plt.subplots_adjust(hspace=0.3, wspace=0.3)  # 增加子图间距以避免标题重叠
+
                 # 保存每个组合的图片
                 filename = f'comprehensive_ablation_analysis_{group_name[0]}_{group_name[1]}_{group_name[2]}_{group_name[3]}.png'
                 plt.savefig(filename, dpi=300, bbox_inches='tight')
@@ -1246,6 +1327,7 @@ class TSPAdvancedVisualizationSuite:
                     ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Component Importance Ranking')
 
+
     def _plot_significance_tests_for_group(self, ax, group_data):
         """为特定组合绘制统计显著性检验结果"""
         try:
@@ -1266,7 +1348,7 @@ class TSPAdvancedVisualizationSuite:
                 return
 
             # 获取p值和效应量数据
-            p_values = group_data[p_value_cols].mean() #都只有一个值
+            p_values = group_data[p_value_cols].mean()  # 都只有一个值
             effect_sizes = group_data[effect_size_cols].mean()
 
             # 提取组件名称
@@ -1291,14 +1373,14 @@ class TSPAdvancedVisualizationSuite:
             # 计算需要的颜色数量并动态生成颜色
             n_colors = 3  # 红、橙、灰三种显著性颜色
             significance_colors = self._get_dynamic_colors(n_colors, 'qualitative')
-            
+
             # 计算-log10(p-value)用于可视化
             log_p_values = [-np.log10(max(p, 1e-10)) for p in p_values]
 
             # 根据显著性着色
-            colors = [significance_colors[0] if p < 0.05 else 
-                     significance_colors[1] if p < 0.1 else 
-                     significance_colors[2] for p in p_values]
+            colors = [significance_colors[0] if p < 0.05 else
+                      significance_colors[1] if p < 0.1 else
+                      significance_colors[2] for p in p_values]
 
             # 绘制散点图
             scatter = ax.scatter(effect_sizes, log_p_values, c=colors, s=100, alpha=0.7, edgecolors='black')
@@ -1309,12 +1391,15 @@ class TSPAdvancedVisualizationSuite:
             ax.axhline(y=-np.log10(0.1), color=significance_colors[1], linestyle='--', alpha=0.5,
                        label='p=0.1 threshold')
 
-            # 添加组件标签
+            # 添加组件标签（添加动态偏移和轻微随机抖动避免重叠）
             for i, name in enumerate(component_names):
                 if i < len(effect_sizes) and i < len(log_p_values):
+                    # 动态偏移：基于值大小计算，添加小随机抖动
+                    offset_x = 5 + (effect_sizes[i] * 2)  # 基于效应大小偏移
+                    offset_y = 5 + np.random.uniform(-3, 3)  # 轻微垂直抖动避免重叠
                     ax.annotate(name, (effect_sizes[i], log_p_values[i]),
-                                xytext=(5, 5), textcoords='offset points',
-                                fontsize=9, ha='left')
+                                xytext=(offset_x, offset_y), textcoords='offset points',
+                                fontsize=4, ha='left')
 
             # 添加图例
             from matplotlib.patches import Patch
@@ -1339,8 +1424,6 @@ class TSPAdvancedVisualizationSuite:
             ax.text(0.5, 0.5, f'Error: {str(e)[:50]}...',
                     ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Statistical Significance Tests')
-
-
 
     def _plot_degradation_from_pathway_data_for_group(self, ax, group_data, pathway_analysis):
         """为特定组合使用pathway_analysis数据绘制退化图"""
@@ -1695,7 +1778,7 @@ class TSPAdvancedVisualizationSuite:
 
             plt.tight_layout()
             plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            plt.show()
+            # plt.show()
 
             # 打印详细的数据分析结果
             print("\n" + "=" * 60)
@@ -1729,7 +1812,7 @@ class TSPAdvancedVisualizationSuite:
             ax.set_title('Component Contribution Radar Chart - Error', fontsize=14)
             ax.axis('off')
             plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            plt.show()
+            # plt.show()
 
     def generate_advanced_summary_report(self):
         """生成高级总结报告"""
@@ -1740,14 +1823,14 @@ class TSPAdvancedVisualizationSuite:
         # 实验设计概述
         print(f"\n📊 实验设计概述:")
         print(f"├─ 状态组合总数: {len(map_state_types)} 种")
-        print(f"├─ 基础状态组件: {', '.join(self.analyzer.base_states)}")
+        print(f"├─ 基础状态组件: {', '.join(full_states)}")
         print(f"├─ 消融策略: 系统性单组件/双组件移除")
-        print(f"└─ 数据集规模: {len(self.analyzer.df):,} 条记录")
+        # print(f"└─ 数据集规模: {len(self.analyzer.df):,} 条记录")
 
         # 状态组合详细信息
         print(f"\n🔬 消融实验状态组合:")
         for state_type, components in map_state_types.items():
-            missing_components = set(self.analyzer.base_states) - set(components)
+            missing_components = set(full_states) - set(components)
             if missing_components:
                 print(f"├─ {state_type}: 移除 {', '.join(missing_components)}")
             else:
@@ -1803,67 +1886,152 @@ class TSPAdvancedVisualizationSuite:
         print(" " * 35 + "实验分析完成 - 博士水准消融研究")
         print("=" * 100)
 
-if __name__ == "__main__":
-    try:
-        # csv_path = project_root+"/notes/tsp_ablation_experiment_data.csv"
-        csv_path = project_root + "/results/tsp_rl_ablation/20250724_235947/experiment_data.csv"
-        csv_path = '/home/y/workplace/mac-bk/git_code/tsp-paper/results/tsp_rl_ablation/20250727_010017/experiment_data.csv'
-        # 拆分CSV文件
-        # files = split_large_csv(csv_path)
 
-        files=['/home/y/workplace/mac-bk/git_code/tsp-paper/results/tsp_rl_ablation/20250727_010017/per_instance_train.csv', '/home/y/workplace/mac-bk/git_code/tsp-paper/results/tsp_rl_ablation/20250727_010017/per_instance_test.csv']
-
-        print(files)
-        for f in files: #[]:
-
+def generate_performance_files(input_files):
+    """
+    生成性能分析文件
+    
+    Args:
+        input_files (list): 输入CSV文件列表
+    
+    Returns:
+        dict: 包含生成的文件路径的字典
+    """
+    generated_files = {}
+    
+    for f in input_files:
+        print(f"处理文件: {f}")
+        try:
             # 读取训练数据文件
-            df = pd.read_csv(f)
-            import pandas as pd
-            df.rename(columns={'current_length': 'current_distance'}, inplace=True)
-
-            # 1. 创建高级分析器
-            print(f"步骤 1: 完成：读取csv {f}...")
+            columns = [
+                'algorithm', 'city_num', 'mode', 'instance_id', 'run_id', 'state_type',
+                'train_test', 'episode', 'step',
+                'state', 'done', 'reward',
+                'total_reward', 'current_distance', 'optimal_distance',
+                'state_values',
+            ]
+            
+            df = pd.read_csv(f, usecols=columns)
+            print(f"完成：读取csv {f}，数据形状: {df.shape}")
+            
             analyzer = TSPAdvancedAblationAnalyzer(df)
-
-            # 2. 计算性能指标
-            print("\n步骤 2: 计算性能指标...")
+            
+            # 生成唯一的文件名前缀
+            file_basename = f.replace('.csv', '').replace('/', '_').replace('\\', '_')
+            
+            # 计算性能指标
+            print("计算性能指标...")
             performance_metrics = analyzer.calculate_performance_metrics()
-            performance_metrics.to_csv('performance_metrics.csv', index=False)
-            print("性能指标已保存到: performance_metrics.csv")
-
-            # 3. 计算高级组件贡献度
-            print("\n步骤 6: 计算高级组件贡献度...")
-            contributions = analyzer.calculate_component_contributions()
+            perf_filename = f'{file_basename}_performance_metrics.csv'
+            performance_metrics.to_csv(perf_filename, index=False)
+            print(f"性能指标已保存到: {perf_filename}")
+            
+            # 计算高级组件贡献度
+            print("计算高级组件贡献度...")
+            contributions = analyzer.calculate_component_contributions(performance_metrics)
+            contrib_filename = f'{file_basename}_advanced_component_contributions.csv'
             if len(contributions) > 0:
-                contributions.to_csv('advanced_component_contributions.csv', index=False)
-                print("高级组件贡献度已保存到: advanced_component_contributions.csv")
-
-            # 4. 计算消融路径分析
-            print("\n步骤 7: 计算消融路径分析...")
-            pathway_analysis = analyzer.calculate_ablation_pathway_analysis(performance_better_when='smaller')
-
+                contributions.to_csv(contrib_filename, index=False)
+                print(f"高级组件贡献度已保存到: {contrib_filename}")
+            
+            # 计算消融路径分析
+            print("计算消融路径分析...")
+            pathway_analysis = analyzer.calculate_ablation_pathway_analysis(
+                performance_better_when='smaller', metrics=performance_metrics)
+            pathway_filename = f'{file_basename}_ablation_pathway_analysis.csv'
             if len(pathway_analysis) > 0:
-                pathway_analysis.to_csv('ablation_pathway_analysis.csv', index=False)
-                print("消融路径分析已保存到: ablation_pathway_analysis.csv")
+                pathway_analysis.to_csv(pathway_filename, index=False)
+                print(f"消融路径分析已保存到: {pathway_filename}")
+            
+            # 记录生成的文件
+            generated_files[f] = {
+                'performance_metrics': perf_filename,
+                'contributions': contrib_filename,
+                'pathway_analysis': pathway_filename
+            }
+            
+            print(f"文件 {f} 处理完成\n")
+            
+        except Exception as e:
+            print(f"处理文件 {f} 时出错: {e}")
+            print(f"详细错误信息: {traceback.format_exc()}")
+            continue
+    
+    return generated_files
 
-            # 5. 创建高级可视化套件
-            print("\n步骤 8: 创建高级可视化...")
-            viz_suite = TSPAdvancedVisualizationSuite(analyzer)
 
-            # 6. 生成高级分析图表
-            print("\n步骤 9: 生成高级分析图表...")
+def generate_visualization_plots(performance_files_dict):
+    """
+    基于性能文件生成可视化图表
 
+    Args:
+        performance_files_dict (dict): 由generate_performance_files生成的文件路径字典
+    """
+    for input_file, file_paths in performance_files_dict.items():
+        print(f"为文件 {input_file} 生成可视化图表...")
+
+        try:
+            # 读取性能文件
+            performance_metrics = pd.read_csv(file_paths['performance_metrics'])
+            contributions = pd.read_csv(file_paths['contributions'])
+            pathway_analysis = pd.read_csv(file_paths['pathway_analysis'])
+
+            print("创建高级可视化套件...")
+            viz_suite = TSPAdvancedVisualizationSuite(contributions, performance_metrics)
+
+            print("生成高级分析图表...")
             # 综合消融分析图
             viz_suite.plot_comprehensive_ablation_analysis(pathway_analysis)
 
-            # 7. 组件贡献雷达图
-            # viz_suite.plot_component_contribution_radar()
-            #
-            # 8. 生成高级总结报告
-            # print("\n步骤 10: 生成高级总结报告...")
-            # viz_suite.generate_advanced_summary_report()
+            # 组件贡献雷达图
+            viz_suite.plot_component_contribution_radar()
+
+            # 生成高级总结报告
+            viz_suite.generate_advanced_summary_report()
+
+            print(f"文件 {input_file} 的可视化图表生成完成\n")
+
+        except Exception as e:
+            print(f"为文件 {input_file} 生成可视化时出错: {e}")
+            print(f"详细错误信息: {traceback.format_exc()}")
+            continue
+
+
+if __name__ == "__main__":
+    try:
+        files = ['1.csv']
+        print(f"待处理文件: {files}")
+        
+        # 步骤1: 生成性能分析文件
+        print("=" * 60)
+        print("步骤1: 生成性能分析文件")
+        print("=" * 60)
+        generated_files = generate_performance_files(files)
+
+        print(f"共处理了 {len(generated_files)} 个文件")
+        for input_file, file_paths in generated_files.items():
+            print(f"文件 {input_file} 生成的文件:")
+            for file_type, file_path in file_paths.items():
+                print(f"  - {file_type}: {file_path}")
+        # generated_files={}
+        # generated_files['2.csv'] = {
+        #     'performance_metrics': 'performance_metrics.csv',
+        #     'contributions': 'advanced_component_contributions.csv',
+        #     'pathway_analysis': 'ablation_pathway_analysis.csv'
+        # }
+        
+        # 步骤2: 生成可视化图表
+        print("\n" + "=" * 60)
+        print("步骤2: 生成可视化图表")
+        print("=" * 60)
+        generate_visualization_plots(generated_files)
+        
+        print("\n" + "=" * 60)
+        print("所有处理完成!")
+        print("=" * 60)
 
     except Exception as e:
+        print(f"主程序执行出错: {e}")
         print(f"详细错误信息: {traceback.format_exc()}")
 
 
