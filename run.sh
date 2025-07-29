@@ -8,7 +8,7 @@ set -e  # Exit on any error
 echo "=== TSP Reinforcement Learning Experiments ==="
 echo "Starting experiment runner..."
 
-#\rm -rf results/*
+\rm -rf results/*
 
 
 # Keep system awake during long experiments (macOS)

@@ -14,12 +14,15 @@ tqdm>=4.64.0
 tsplib95>=0.7.1
 
 # Configuration and utilities
-PyYAML>=6.0
-scikit-learn>=1.1.0
+PyYAML
+scikit-learn
 seaborn
 plotly
 dask
 pyarrow
+pandas
+numpy
+tqdm
 
 # pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 # Optional: For better performance

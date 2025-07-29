@@ -17,8 +17,8 @@ dataset:
   
 # Training Configuration
 training:
-  episodes_per_instance: 1000     # Episodes per instance in per-instance mode
-  episodes_cross_instance: 2000  # Total episodes in cross-instance mode
+  episodes_per_instance: 200     # Episodes per instance in per-instance mode
+  episodes_cross_instance: 200  # Total episodes in cross-instance mode
   repeat_runs: 6                  # Number of independent runs per experiment
   batch_size: 4
   learning_rate: 0.001

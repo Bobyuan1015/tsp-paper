@@ -116,7 +116,6 @@ class DatasetLoader:
             env = TSPEnvironment(
                 n_cities=len(coordinates),
                 coordinates=coordinates,
-                seed=instance_data.get('seed'),
                 use_tsplib=False,
                 state_components=state_components
             )
