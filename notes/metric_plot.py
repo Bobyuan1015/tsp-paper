@@ -25,6 +25,8 @@ from collections import defaultdict
 import os
 import csv
 import time
+from matplotlib.lines import Line2D
+
 from collections import defaultdict
 
 
@@ -197,66 +199,89 @@ class TSPAdvancedAblationAnalyzer:
         self.df = df
         self.results = {}
 
+    # def calculate_performance_metrics(self) -> pd.DataFrame:
+    #     """计算核心性能指标"""
+    #     print("计算性能指标...")
+    #     episode_data = self.df[self.df['done'] == 1].copy()
+    #     episode_data['optimality_gap'] = (
+    #             (episode_data['current_distance'] - episode_data['optimal_distance']) /
+    #             episode_data['optimal_distance'] * 100
+    #     )
+    #     episode_data.to_csv('t3.csv',index=False)
+    #     # 第一次分组聚合，并设置列名前缀为 "instance_"
+    #     instance_metrics = episode_data.groupby(
+    #         ['algorithm', 'city_num', 'mode', 'state_type', 'train_test', 'instance_id']).agg({
+    #         'optimality_gap': ['min'],  # ['mean', 'std', 'max', 'min', 'count'],
+    #         'total_reward': ['max']  # ['mean', 'std', 'max', 'min', 'count'],
+    #     }).round(4)
+    #
+    #
+    #     # 重构列名，将多级列名展平并添加 "instance_" 前缀
+    #     instance_metrics.columns = ['instance_' + '_'.join(col).strip() for col in instance_metrics.columns.values]
+    #
+    #     # 重置索引，使分组列变为普通列
+    #     instance_metrics = instance_metrics.reset_index()
+    #
+    #     # 第二次分组聚合
+    #     # 首先获取所有以 "instance_" 开头的列名
+    #     instance_columns = [col for col in instance_metrics.columns if col.startswith('instance_') and col != 'instance_id']
+    #
+    #     # 构建第二次聚合的字典
+    #     agg_dict = {}
+    #     for col in instance_columns:
+    #         agg_dict[col] = ['mean', 'std', 'max', 'min', 'count']
+    #
+    #     # 进行第二次分组聚合
+    #     metrics = instance_metrics.groupby(['algorithm', 'city_num', 'mode', 'state_type', 'train_test']).agg(
+    #         agg_dict).round(4)
+    #     metrics = metrics.fillna(0)
+    #
+    #     # 重构最终列名
+    #     final_columns = []
+    #     for col in metrics.columns.values:
+    #         if col[0].startswith('instance_optimality_gap'):
+    #             # 从 instance_optimality_gap_xxx 提取后面的部分，然后与聚合函数组合
+    #             original_metric = col[0].replace('instance_', '').split('_')[0] + '_' + \
+    #                               col[0].replace('instance_', '').split('_')[1]  # optimality_gap
+    #             final_columns.append(f"optimality_gap_{col[1]}")
+    #         elif col[0].startswith('instance_total_reward'):
+    #             # 从 instance_total_reward_xxx 提取后面的部分，然后与聚合函数组合
+    #             final_columns.append(f"total_reward_{col[1]}")
+    #         else:
+    #             # 其他情况保持原样或根据需要处理
+    #             final_columns.append('_'.join(col).strip())
+    #
+    #     metrics.columns = final_columns
+    #
+    #     # 重置索引
+    #     metrics = metrics.reset_index()
+    #
+    #
+    #     # metrics = metrics.compute()
+    #
+    #     return metrics
     def calculate_performance_metrics(self) -> pd.DataFrame:
         """计算核心性能指标"""
         print("计算性能指标...")
-
         episode_data = self.df[self.df['done'] == 1].copy()
         episode_data['optimality_gap'] = (
                 (episode_data['current_distance'] - episode_data['optimal_distance']) /
                 episode_data['optimal_distance'] * 100
         )
-
+        episode_data.to_csv('t3.csv',index=False)
         # 第一次分组聚合，并设置列名前缀为 "instance_"
-        instance_metrics = episode_data.groupby(
+        metrics = episode_data.groupby(
             ['algorithm', 'city_num', 'mode', 'state_type', 'train_test', 'instance_id']).agg({
             'optimality_gap': ['mean', 'std', 'max', 'min', 'count'],
-            'total_reward': ['mean', 'std', 'max', 'min', 'count'],
+            'total_reward':  ['mean', 'std', 'max', 'min', 'count'],
         }).round(4)
-
-        # 重构列名，将多级列名展平并添加 "instance_" 前缀
-        instance_metrics.columns = ['instance_' + '_'.join(col).strip() for col in instance_metrics.columns.values]
-
-        # 重置索引，使分组列变为普通列
-        instance_metrics = instance_metrics.reset_index()
-
-        # 第二次分组聚合
-        # 首先获取所有以 "instance_" 开头的列名
-        instance_columns = [col for col in instance_metrics.columns if col.startswith('instance_') and col != 'instance_id']
-
-        # 构建第二次聚合的字典
-        agg_dict = {}
-        for col in instance_columns:
-            agg_dict[col] = ['mean', 'std', 'max', 'min', 'count']
-
-        # 进行第二次分组聚合
-        metrics = instance_metrics.groupby(['algorithm', 'city_num', 'mode', 'state_type', 'train_test']).agg(
-            agg_dict).round(4)
-
-        # 重构最终列名
-        final_columns = []
-        for col in metrics.columns.values:
-            if col[0].startswith('instance_optimality_gap'):
-                # 从 instance_optimality_gap_xxx 提取后面的部分，然后与聚合函数组合
-                original_metric = col[0].replace('instance_', '').split('_')[0] + '_' + \
-                                  col[0].replace('instance_', '').split('_')[1]  # optimality_gap
-                final_columns.append(f"optimality_gap_{col[1]}")
-            elif col[0].startswith('instance_total_reward'):
-                # 从 instance_total_reward_xxx 提取后面的部分，然后与聚合函数组合
-                final_columns.append(f"total_reward_{col[1]}")
-            else:
-                # 其他情况保持原样或根据需要处理
-                final_columns.append('_'.join(col).strip())
-
-        metrics.columns = final_columns
+        metrics.columns = ['_'.join(col).strip() for col in metrics.columns.values]
 
         # 重置索引
         metrics = metrics.reset_index()
 
-
-        # metrics = metrics.compute()
-
         return metrics
+
 
     def _welch_t_test(self, mean1, std1, n1, mean2, std2, n2):
         """
@@ -348,7 +373,7 @@ class TSPAdvancedAblationAnalyzer:
     def calculate_component_contributions(self,metrics) -> pd.DataFrame:
         """高级组件贡献度分析 - 基于消融实验理论"""
         print("执行高级组件贡献度分析...")
-        if not metrics:
+        if  metrics is not None:
             metrics = self.calculate_performance_metrics()
         contributions = []
 
@@ -611,7 +636,7 @@ class TSPAdvancedAblationAnalyzer:
             'pathway_performance': actual_pathway_perf,
             'total_degradation': get_degradation(actual_pathway_perf[-1], actual_pathway_perf[0]) if len(
                 actual_pathway_perf) > 1 else 0,
-            'degradation_rate': [get_degradation(actual_pathway_perf[i + 1], actual_pathway_perf[i])
+            'degradation_rate': [get_degradation( actual_pathway_perf[i],actual_pathway_perf[i + 1])
                                  for i in range(len(actual_pathway_perf) - 1)],
             'pathway_components': actual_pathway_components,
             'pathway_description': f'Optimal path (minimal degradation, {performance_better_when} is better)'
@@ -622,7 +647,7 @@ class TSPAdvancedAblationAnalyzer:
             'pathway_performance': worst_pathway_perf,
             'total_degradation': get_degradation(worst_pathway_perf[-1], worst_pathway_perf[0]) if len(
                 worst_pathway_perf) > 1 else 0,
-            'degradation_rate': [get_degradation(worst_pathway_perf[i + 1], worst_pathway_perf[i])
+            'degradation_rate': [get_degradation( worst_pathway_perf[i],worst_pathway_perf[i + 1])
                                  for i in range(len(worst_pathway_perf) - 1)],
             'pathway_components': worst_pathway_components,
             'pathway_description': f'Worst case path (maximal degradation, {performance_better_when} is better)'
@@ -1199,7 +1224,7 @@ class TSPAdvancedVisualizationSuite:
                 filename = f'comprehensive_ablation_analysis_{group_name[0]}_{group_name[1]}_{group_name[2]}_{group_name[3]}.png'
                 plt.savefig(filename, dpi=300, bbox_inches='tight')
                 # plt.show()
-                break
+                # break
                 plot_count += 1
 
             except Exception as e:
@@ -1406,7 +1431,10 @@ class TSPAdvancedVisualizationSuite:
             legend_elements = [
                 Patch(facecolor=significance_colors[0], alpha=0.7, label='p < 0.05 (Significant)'),
                 Patch(facecolor=significance_colors[1], alpha=0.7, label='p < 0.1 (Marginal)'),
-                Patch(facecolor=significance_colors[2], alpha=0.7, label='p ≥ 0.1 (Not Significant)')
+                Patch(facecolor=significance_colors[2], alpha=0.7, label='p ≥ 0.1 (Not Significant)'),
+                Line2D([0], [0], color=significance_colors[0], linestyle='--', alpha=0.7, label='p=0.05 threshold'),
+                Line2D([0], [0], color=significance_colors[1], linestyle='--', alpha=0.5, label='p=0.1 threshold')
+
             ]
             ax.legend(handles=legend_elements, loc='upper left')
 
@@ -1557,7 +1585,7 @@ class TSPAdvancedVisualizationSuite:
                 (pathway_analysis['train_test'] == group_info['train_test']) &
                 (pathway_analysis['pathway_type'] == 'ablation_sequence') &
                 (pathway_analysis['pathway_length'] > 1)
-            ]
+                ]
 
             if len(path_subset) == 0:
                 ax.text(0.5, 0.5, 'No valid pathway sequences found',
@@ -1569,11 +1597,15 @@ class TSPAdvancedVisualizationSuite:
             n_colors = min(len(path_subset), 6)  # 最多显示6条路径
             colors = self._get_dynamic_colors(n_colors, 'qualitative')
 
+            # 用于检查是否有有效的图例项
+            legend_items = []
+
             for i, (_, row) in enumerate(path_subset.iterrows()):
                 if i >= n_colors:
                     break
 
-                pathway_name = row['pathway_name']
+                # 确保pathway_name不为空
+                pathway_name = row['pathway_name'] if row['pathway_name'] else f'Pathway_{i + 1}'
 
                 try:
                     perf_list_str = row['pathway_performance_list']
@@ -1582,25 +1614,122 @@ class TSPAdvancedVisualizationSuite:
 
                         if len(perf_list) > 1:
                             x_values = list(range(len(perf_list)))
-                            ax.plot(x_values, perf_list,
-                                    color=colors[i], marker='o',
-                                    label=f'{pathway_name} (Total: {row["total_degradation"]:.1f}%)',
-                                    linewidth=2, markersize=6)
+
+                            # 创建标签字符串，确保数值有效
+                            total_deg = row.get("total_degradation", 0)
+                            if pd.isna(total_deg):
+                                total_deg = 0
+                            label_str = f'{pathway_name} (Total: {total_deg:.1f}%)'
+
+                            # 绘制线条
+                            line = ax.plot(x_values, perf_list,
+                                           color=colors[i], marker='o',
+                                           label=label_str,
+                                           linewidth=2, markersize=6)
+
+                            legend_items.append(label_str)
+                            print(f"Added line for: {label_str}")  # 调试信息
+
                 except Exception as e:
-                    print(f"Error parsing pathway data for {pathway_name}: {e} {traceback.format_exc()} ")
+                    print(f"Error parsing pathway data for {pathway_name}: {e}")
                     continue
 
+            # 设置图形属性
             ax.set_xlabel('Ablation Steps')
             ax.set_ylabel('Performance (Optimality Gap %)')
             ax.set_title('Ablation Pathway Comparison')
-            ax.legend()
             ax.grid(True, alpha=0.3)
 
+            # 只在有图例项时添加图例
+            if legend_items:
+                # 尝试不同的图例位置，避免被遮挡
+                legend = ax.legend(loc='best', frameon=True, fancybox=True, shadow=True)
+                # 或者使用固定位置：
+                # legend = ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+                # 确保图例可见
+                legend.set_zorder(100)  # 设置图例在最上层
+                print(f"Legend created with {len(legend_items)} items")
+            else:
+                print("No legend items to display")
+
         except Exception as e:
-            print(f"Error in pathway plotting: {e} {traceback.format_exc()} ")
+            print(f"Error in pathway plotting: {e}")
+            import traceback
+            traceback.print_exc()
             ax.text(0.5, 0.5, f'Plotting error: {str(e)[:50]}...',
                     ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Ablation Pathway Comparison')
+
+    # def _plot_ablation_pathways_comparison_for_group(self, ax, group_data, pathway_analysis):
+    #     """为特定组合绘制消融路径比较图"""
+    #     try:
+    #         if pathway_analysis is None or len(pathway_analysis) == 0:
+    #             ax.text(0.5, 0.5, 'No pathway data available',
+    #                     ha='center', va='center', transform=ax.transAxes)
+    #             ax.set_title('Ablation Pathway Comparison')
+    #             return
+    #
+    #         # 获取当前组合的标识信息
+    #         group_info = group_data.iloc[0] if len(group_data) > 0 else None
+    #         if group_info is None:
+    #             ax.text(0.5, 0.5, 'No group data available',
+    #                     ha='center', va='center', transform=ax.transAxes)
+    #             ax.set_title('Ablation Pathway Comparison')
+    #             return
+    #
+    #         # 筛选对应组合的路径数据
+    #         path_subset = pathway_analysis[
+    #             (pathway_analysis['algorithm'] == group_info['algorithm']) &
+    #             (pathway_analysis['city_num'] == group_info['city_num']) &
+    #             (pathway_analysis['mode'] == group_info['mode']) &
+    #             (pathway_analysis['train_test'] == group_info['train_test']) &
+    #             (pathway_analysis['pathway_type'] == 'ablation_sequence') &
+    #             (pathway_analysis['pathway_length'] > 1)
+    #         ]
+    #
+    #         if len(path_subset) == 0:
+    #             ax.text(0.5, 0.5, 'No valid pathway sequences found',
+    #                     ha='center', va='center', transform=ax.transAxes)
+    #             ax.set_title('Ablation Pathway Comparison')
+    #             return
+    #
+    #         # 计算需要的颜色数量并动态生成颜色
+    #         n_colors = min(len(path_subset), 6)  # 最多显示6条路径
+    #         colors = self._get_dynamic_colors(n_colors, 'qualitative')
+    #
+    #         for i, (_, row) in enumerate(path_subset.iterrows()):
+    #             if i >= n_colors:
+    #                 break
+    #
+    #             pathway_name = row['pathway_name']
+    #
+    #             try:
+    #                 perf_list_str = row['pathway_performance_list']
+    #                 if perf_list_str and perf_list_str != '[]':
+    #                     perf_list = eval(perf_list_str) if isinstance(perf_list_str, str) else perf_list_str
+    #
+    #                     if len(perf_list) > 1:
+    #                         x_values = list(range(len(perf_list)))
+    #                         ax.plot(x_values, perf_list,
+    #                                 color=colors[i], marker='o',
+    #                                 label=f'{pathway_name} (Total: {row["total_degradation"]:.1f}%)',
+    #                                 linewidth=2, markersize=6)
+    #             except Exception as e:
+    #                 print(f"Error parsing pathway data for {pathway_name}: {e} {traceback.format_exc()} ")
+    #                 continue
+    #
+    #         ax.set_xlabel('Ablation Steps')
+    #         ax.set_ylabel('Performance (Optimality Gap %)')
+    #         ax.set_title('Ablation Pathway Comparison')
+    #         ax.legend()
+    #         ax.grid(True, alpha=0.3)
+    #
+    #     except Exception as e:
+    #         print(f"Error in pathway plotting: {e} {traceback.format_exc()} ")
+    #         ax.text(0.5, 0.5, f'Plotting error: {str(e)[:50]}...',
+    #                 ha='center', va='center', transform=ax.transAxes)
+    #         ax.set_title('Ablation Pathway Comparison')
 
     def _plot_marginal_contributions_for_group(self, ax, group_data):
         """为特定组合绘制边际贡献图"""
@@ -1899,7 +2028,7 @@ def generate_performance_files(input_files):
     """
     generated_files = {}
     
-    for f in input_files:
+    for i,f in enumerate(input_files):
         print(f"处理文件: {f}")
         try:
             # 读取训练数据文件
@@ -1917,19 +2046,19 @@ def generate_performance_files(input_files):
             analyzer = TSPAdvancedAblationAnalyzer(df)
             
             # 生成唯一的文件名前缀
-            file_basename = f.replace('.csv', '').replace('/', '_').replace('\\', '_')
+            # file_basename = f.replace('.csv', '').replace('/', '_').replace('\\', '_')
             
             # 计算性能指标
             print("计算性能指标...")
             performance_metrics = analyzer.calculate_performance_metrics()
-            perf_filename = f'{file_basename}_performance_metrics.csv'
+            perf_filename = f'{i}_performance_metrics.csv'
             performance_metrics.to_csv(perf_filename, index=False)
             print(f"性能指标已保存到: {perf_filename}")
             
             # 计算高级组件贡献度
             print("计算高级组件贡献度...")
             contributions = analyzer.calculate_component_contributions(performance_metrics)
-            contrib_filename = f'{file_basename}_advanced_component_contributions.csv'
+            contrib_filename = f'{i}_advanced_component_contributions.csv'
             if len(contributions) > 0:
                 contributions.to_csv(contrib_filename, index=False)
                 print(f"高级组件贡献度已保存到: {contrib_filename}")
@@ -1938,7 +2067,7 @@ def generate_performance_files(input_files):
             print("计算消融路径分析...")
             pathway_analysis = analyzer.calculate_ablation_pathway_analysis(
                 performance_better_when='smaller', metrics=performance_metrics)
-            pathway_filename = f'{file_basename}_ablation_pathway_analysis.csv'
+            pathway_filename = f'{i}_ablation_pathway_analysis.csv'
             if len(pathway_analysis) > 0:
                 pathway_analysis.to_csv(pathway_filename, index=False)
                 print(f"消融路径分析已保存到: {pathway_filename}")
@@ -1999,7 +2128,9 @@ def generate_visualization_plots(performance_files_dict):
 
 if __name__ == "__main__":
     try:
-        files = ['1.csv']
+        files = [
+            '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_cross_instance_20250730_000205/experiment_data_20250730_000205.csv',
+                 '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250730_000205/experiment_data_20250730_000205.csv']
         print(f"待处理文件: {files}")
         
         # 步骤1: 生成性能分析文件
