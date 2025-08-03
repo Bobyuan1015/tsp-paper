@@ -263,15 +263,16 @@ class Logger:
                               total_instances: int,
                               current_run: int,
                               total_runs: int,
+                              index_instance:int,
                               current_task: int = None,
                               total_tasks: int = None):
         """Log overall experiment progress."""
         # Calculate progress percentages
-        instance_pct = (current_instance / total_instances) * 100 if total_instances > 0 else 0
+        instance_pct = ((index_instance+1) / total_instances) * 100 if total_instances > 0 else 0
         run_pct = (current_run / total_runs) * 100 if total_runs > 0 else 0
         
         progress_msg = (f"[{city_num}cities] Progress: "
-                       f"Instance {current_instance}/{total_instances} ({instance_pct:.1f}%), "
+                       f"Instance {index_instance+1}/{total_instances} ({instance_pct:.1f}%), "
                        f"Run {current_run}/{total_runs} ({run_pct:.1f}%)")
         
         # Add total progress if provided
