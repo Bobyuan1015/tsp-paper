@@ -15,13 +15,8 @@ from itertools import combinations
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
 warnings.filterwarnings('ignore')
 
-import csv
-import os
-from collections import defaultdict
 import os
 import csv
 import time
@@ -31,27 +26,13 @@ from collections import defaultdict
 
 
 def split_large_csv(input_file, output_dir=None, buffer_size=1000000):
-    """
-    拆分大CSV文件按(mode, train_test)分组 - 优化版本
-
-    Args:
-        input_file: 输入CSV文件路径
-        output_dir: 输出目录，如果为None则使用输入文件的同级目录
-        buffer_size: 每个文件的缓冲区大小（行数），默认1000行
-
-    Returns:
-        list: 生成的所有小文件的完整路径列表
-    """
     # 如果未指定输出目录，使用输入文件的同级目录
     if output_dir is None:
         output_dir = os.path.dirname(os.path.abspath(input_file))
 
     os.makedirs(output_dir, exist_ok=True)
-
-    # 使用更大的文件读取缓冲区
     file_buffer_size = 8192 * 16  # 128KB缓冲区
 
-    # 快速估算文件大小和行数
     print("正在估算文件大小...")
     file_size = os.path.getsize(input_file)
 
@@ -74,7 +55,6 @@ def split_large_csv(input_file, output_dir=None, buffer_size=1000000):
     else:
         estimated_lines = 0
 
-    # 使用缓冲区批量写入
     file_buffers = defaultdict(list)  # 每个文件的数据缓冲区
     file_handles = {}
     writers = {}
@@ -143,8 +123,6 @@ def split_large_csv(input_file, output_dir=None, buffer_size=1000000):
                         speed = processed_count / elapsed_time if elapsed_time > 0 else 0
                         print(f"已处理: {processed_count:,} 行 | 速度: {speed:.0f} 行/秒 | 文件数: {len(output_files)}")
 
-        # 处理完成后刷新所有剩余的缓冲区
-        print("正在写入剩余数据...")
         flush_all_buffers()
 
     finally:
@@ -193,7 +171,6 @@ full_states = ["current_city_onehot", "visited_mask", "order_embedding", "distan
 
 
 class TSPAdvancedAblationAnalyzer:
-    """高级TSP消融实验分析器 - 博士水准"""
 
     def __init__(self):
 
@@ -201,7 +178,6 @@ class TSPAdvancedAblationAnalyzer:
 
     def calculate_performance_metrics(self, df=None,i=0) -> pd.DataFrame:
         """计算核心性能指标"""
-        print("计算性能指标...")
         # todo
         episode_data = df[(df['done'] == 1) & (df['train_test'] == 'train')].copy()
         episode_data['optimality_gap'] = (
@@ -210,10 +186,7 @@ class TSPAdvancedAblationAnalyzer:
         )
         episode_data.to_csv(f'{i}_t3.csv', index=False)
 
-
         # episode_data= pd.read_csv('t3.csv')
-
-        # 第一次分组聚合，并设置列名前缀为 "instance_"
         metrics = episode_data.groupby(
             ['algorithm', 'city_num', 'mode', 'state_type', 'train_test', 'instance_id']).agg({
             'optimality_gap': ['mean', 'std', 'max', 'min', 'count',list],
@@ -221,7 +194,6 @@ class TSPAdvancedAblationAnalyzer:
         }).round(4)
         metrics.columns = ['_'.join(col).strip() for col in metrics.columns.values]
 
-        # 重置索引
         metrics = metrics.reset_index()
 
         return metrics
@@ -336,7 +308,6 @@ class TSPAdvancedAblationAnalyzer:
                         if len(subset) == 0:
                             continue
 
-                        # 获取全状态的统计信息
                         full_row = subset[subset['state_type'] == 'full']
                         if len(full_row) == 0:
                             continue
@@ -347,7 +318,6 @@ class TSPAdvancedAblationAnalyzer:
                             'count': full_row.iloc[0]['optimality_gap_count']
                         }
 
-                        # 构建性能字典
                         performance_dict = {}
                         for _, row in subset.iterrows():
                             state_type = row['state_type']
@@ -358,7 +328,6 @@ class TSPAdvancedAblationAnalyzer:
 
                         full_performance = performance_dict['full']
 
-                        # 计算各组件的边际贡献
                         component_contributions = self._calculate_marginal_contributions(performance_dict)
 
                         # 计算交互效应:  该函数计算当同时移除两个组件时，产生的交互效应是否大于、小于或等于单独移除这两个组件效应的简单相加。
@@ -429,7 +398,6 @@ class TSPAdvancedAblationAnalyzer:
     def _calculate_interaction_effects(self, performance_dict: Dict[str, float]) -> Dict[str, float]:
         """
         计算组件间的交互效应
-
         简化为：
         IE_{i,j} = P(S \ {i,j}) - ( P(S \ {i}) + P(S \ {j}) )
         其中：
@@ -558,7 +526,6 @@ class TSPAdvancedAblationAnalyzer:
         actual_pathway_perf = [full_perf]
         actual_pathway_components = []
 
-
         worst_pathway_perf = [full_perf]
         worst_pathway_components =[]
         for num_removed in sorted(available_pathways.keys()): # remove状态，从少到多，性能逐渐退化
@@ -599,35 +566,8 @@ class TSPAdvancedAblationAnalyzer:
 
         return pathways
 
-    def _find_closest_state(self, target_key: str, available_keys: List[str]) -> str:
-        """寻找最接近的状态键"""
-        target_components = set(target_key.split('_')[2:])  # 移除 'ablation_remove_' 前缀
-
-        best_match = None
-        best_score = -1
-
-        for key in available_keys:
-            if key.startswith('ablation_remove_'):
-                key_components = set(key.split('_')[2:])
-
-                # 计算交集大小作为匹配分数
-                intersection = len(target_components.intersection(key_components))
-                if intersection > best_score:
-                    best_score = intersection
-                    best_match = key
-
-        return best_match
 
     def calculate_ablation_pathway_analysis(self, performance_better_when='smaller', metrics=None) -> pd.DataFrame:
-        """
-        消融路径分析
-        Args:
-            performance_better_when (str):
-                - 'smaller': 性能指标越小越好（如TSP的optimality_gap, distance）
-                - 'larger': 性能指标越大越好（如reward, accuracy）
-            metrics (pd.DataFrame, optional): 预计算的性能指标数据。如果为None，则使用self.df计算
-        """
-        print(f"执行消融路径分析... (性能指标: {performance_better_when} is better)")
 
         if metrics is None:
             return None
@@ -655,7 +595,6 @@ class TSPAdvancedAblationAnalyzer:
 
                         if 'full' not in performance_dict:
                             continue
-
 
                         # 对比  剔除 状态个数 的衰减（组合中最小衰减 和 最大衰减）
                         pathways = self._analyze_ablation_pathways(performance_dict, performance_better_when)
@@ -730,33 +669,18 @@ class TSPAdvancedAblationAnalyzer:
 
 
 class TSPAdvancedVisualizationSuite:
-    """高级TSP可视化套件 - 博士水准"""
-
     def __init__(self, contributions,performance_metrics):
-
         self.contributions = contributions
         self.performance_metrics = performance_metrics
-
-        # 设置学术图表样式 - 修正了样式名称
         sns.set_style("whitegrid")
         sns.set_palette("viridis")
 
     def _get_dynamic_colors(self, n_colors, color_type='qualitative'):
-        """
-        动态获取无重复且有明显区分度的颜色
 
-        Args:
-            n_colors: 需要的颜色数量
-            color_type: 颜色类型 ('qualitative', 'sequential', 'diverging')
-
-        Returns:
-            list: 颜色列表
-        """
         if n_colors == 0:
             return []
 
         if color_type == 'qualitative':
-            # 高对比度颜色列表，确保区分度
             high_contrast_colors = [
                 '#FF0000',  # 红色
                 '#0000FF',  # 蓝色
@@ -786,371 +710,47 @@ class TSPAdvancedVisualizationSuite:
             # 如果需要更多颜色，使用HSV色彩空间生成
             colors = high_contrast_colors.copy()
             remaining = n_colors - len(colors)
-
             for i in range(remaining):
                 hue = (i * 137.508) % 360  # 黄金角度，确保颜色分散
                 saturation = 0.8 + 0.2 * (i % 2)  # 在0.8-1.0之间交替
                 value = 0.7 + 0.3 * ((i // 2) % 2)  # 在0.7-1.0之间交替
-
                 # HSV转RGB
                 import colorsys
                 rgb = colorsys.hsv_to_rgb(hue/360, saturation, value)
                 hex_color = '#{:02x}{:02x}{:02x}'.format(
                     int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
                 colors.append(hex_color)
-
             return colors[:n_colors]
 
         elif color_type == 'sequential':
-            # 顺序颜色，适用于数值渐变
             return sns.color_palette("viridis", n_colors)
-
         elif color_type == 'diverging':
-            # 发散颜色，适用于正负值对比
             return sns.color_palette("RdBu_r", n_colors)
-
         else:
-            # 默认返回qualitative
             return self._get_dynamic_colors(n_colors, 'qualitative')
 
-    def plot_component_contribution_radar(self):
-        """绘制基于真实数据的组件贡献雷达图"""
-        print("绘制组件贡献雷达图...")
 
-        try:
-            if len(self.contributions) == 0:
-                print("No contribution data available for radar chart")
-                return
-
-            # 从真实数据中提取组件贡献信息
-            marginal_cols = [col for col in self.contributions.columns if 'marginal_contribution' in col]
-            if not marginal_cols:
-                print("No marginal contribution data available for radar chart")
-                return
-
-            # 提取组件名称
-            component_names = []
-            for col in marginal_cols:
-                component = col.replace('_marginal_contribution', '').replace('_', ' ').title()
-                component_names.append(component)
-
-            # 按算法分组获取贡献度数据
-            algorithms = self.contributions['algorithm'].unique()
-
-            if len(algorithms) == 0:
-                print("No algorithm data available for radar chart")
-                return
-
-            # 动态确定要显示的算法数量（最多显示4个）
-            display_algorithms = algorithms[:min(4, len(algorithms))]
-            n_algorithms = len(display_algorithms)
-
-            # 创建子图布局
-            if n_algorithms == 1:
-                fig, axes = plt.subplots(1, 1, figsize=(10, 10), subplot_kw={'projection': 'polar'})
-                axes = [axes]
-            elif n_algorithms == 2:
-                fig, axes = plt.subplots(1, 2, figsize=(20, 10), subplot_kw={'projection': 'polar'})
-            elif n_algorithms <= 4:
-                fig, axes = plt.subplots(2, 2, figsize=(20, 20), subplot_kw={'projection': 'polar'})
-                axes = axes.flatten()
-            else:
-                fig, axes = plt.subplots(2, 3, figsize=(24, 16), subplot_kw={'projection': 'polar'})
-                axes = axes.flatten()
-
-            # 设置角度
-            angles = np.linspace(0, 2 * np.pi, len(component_names), endpoint=False).tolist()
-            angles += angles[:1]  # 闭合图形
-
-            # 颜色方案
-            colors = plt.cm.Set3(np.linspace(0, 1, n_algorithms))
-
-            for i, algorithm in enumerate(display_algorithms):
-                if i >= len(axes):
-                    break
-
-                ax = axes[i]
-
-                # 获取该算法的贡献度数据
-                algo_data = self.contributions[self.contributions['algorithm'] == algorithm]
-
-                if len(algo_data) == 0:
-                    ax.text(0.5, 0.5, f'No data for {algorithm}',
-                            ha='center', va='center', transform=ax.transAxes)
-                    ax.set_title(f'{algorithm} - No Data', size=14, fontweight='bold')
-                    continue
-
-                # 计算各组件的平均贡献度
-                component_values = []
-                for col in marginal_cols:
-                    if col in algo_data.columns:
-                        # 使用绝对值并归一化到0-1范围
-                        value = abs(algo_data[col].mean())
-                        component_values.append(value)
-                    else:
-                        component_values.append(0.0)
-
-                # 归一化到0-1范围
-                if max(component_values) > 0:
-                    max_val = max(component_values)
-                    normalized_values = [v / max_val for v in component_values]
-                else:
-                    normalized_values = component_values
-
-                # 闭合雷达图
-                radar_values = normalized_values + normalized_values[:1]
-
-                # 绘制雷达图
-                ax.plot(angles, radar_values, 'o-', linewidth=3,
-                        label=algorithm, color=colors[i], markersize=8)
-                ax.fill(angles, radar_values, alpha=0.25, color=colors[i])
-
-                # 设置标签
-                ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(component_names, fontsize=10)
-
-                # 设置径向标签
-                ax.set_ylim(0, 1)
-                ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
-                ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=8)
-                ax.grid(True)
-
-                # 添加数值标签
-                for angle, value, name in zip(angles[:-1], normalized_values, component_names):
-                    ax.text(angle, value + 0.05, f'{value:.2f}',
-                            ha='center', va='center', fontsize=8, fontweight='bold')
-
-                # 设置标题，包含实际的贡献度统计信息
-                mean_contribution = np.mean(component_values)
-                max_contribution = max(component_values)
-                ax.set_title(f'{algorithm}\nMean: {mean_contribution:.3f}, Max: {max_contribution:.3f}',
-                             size=12, fontweight='bold', pad=20)
-
-            # 隐藏多余的子图
-            for j in range(n_algorithms, len(axes)):
-                axes[j].set_visible(False)
-
-            # 添加总体图例和统计信息
-            if n_algorithms > 1:
-                # 在图外添加整体统计信息
-                fig.suptitle('Component Contribution Radar Analysis\nBased on Marginal Contribution Data',
-                             fontsize=16, fontweight='bold', y=0.95)
-
-                # 计算跨算法的组件重要性排序
-                overall_importance = {}
-                for i, col in enumerate(marginal_cols):
-                    component = component_names[i]
-                    overall_value = abs(self.contributions[col].mean())
-                    overall_importance[component] = overall_value
-
-                # 排序并添加文本说明
-                sorted_importance = sorted(overall_importance.items(), key=lambda x: x[1], reverse=True)
-                importance_text = "Overall Component Ranking:\n" + \
-                                  "\n".join([f"{i + 1}. {comp}: {val:.3f}"
-                                             for i, (comp, val) in enumerate(sorted_importance)])
-
-                fig.text(0.02, 0.02, importance_text, fontsize=10,
-                         bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
-
-            plt.tight_layout()
-            plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            # plt.show()
-
-            # 打印详细的数据分析结果
-            print("\n" + "=" * 60)
-            print("组件贡献雷达图数据分析")
-            print("=" * 60)
-
-            for algorithm in display_algorithms:
-                algo_data = self.contributions[self.contributions['algorithm'] == algorithm]
-                if len(algo_data) > 0:
-                    print(f"\n算法: {algorithm}")
-                    print("-" * 30)
-
-                    for i, col in enumerate(marginal_cols):
-                        component = component_names[i]
-                        if col in algo_data.columns:
-                            mean_val = algo_data[col].mean()
-                            std_val = algo_data[col].std()
-                            print(f"{component}: {mean_val:.4f} (±{std_val:.4f})")
-
-            print("=" * 60)
-
-        except Exception as e:
-            print(f"绘制雷达图时出现错误: {e} {traceback.format_exc()} ")
-            print(f"详细错误信息: {traceback.format_exc()}")
-
-            # 创建一个简单的错误提示图
-            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-            ax.text(0.5, 0.5, f'Error generating radar chart:\n{str(e)[:100]}...',
-                    ha='center', va='center', transform=ax.transAxes,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral", alpha=0.8))
-            ax.set_title('Component Contribution Radar Chart - Error', fontsize=14)
-            ax.axis('off')
-            plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            # plt.show()
-
-    def generate_advanced_summary_report(self):
-        """生成高级总结报告"""
-        print("\n" + "=" * 100)
-        print(" " * 30 + "TSP深度强化学习高级消融实验分析报告")
-        print("=" * 100)
-
-        # 实验设计概述
-        print(f"\n📊 实验设计概述:")
-        print(f"├─ 状态组合总数: {len(map_state_types)} 种")
-        print(f"├─ 基础状态组件: {', '.join(full_states)}")
-        print(f"├─ 消融策略: 系统性单组件/双组件移除")
-        print(f"└─ 数据集规模: {len(self.analyzer.df):,} 条记录")
-
-        # 状态组合详细信息
-        print(f"\n🔬 消融实验状态组合:")
-        for state_type, components in map_state_types.items():
-            missing_components = set(full_states) - set(components)
-            if missing_components:
-                print(f"├─ {state_type}: 移除 {', '.join(missing_components)}")
-            else:
-                print(f"├─ {state_type}: 完整状态 (基线)")
-
-        # 性能分析结果
-        if len(self.performance_metrics) > 0:
-            print(f"\n📈 性能分析结果:")
-            state_performance = self.performance_metrics.groupby('state_type')[
-                'optimality_gap_mean'].mean().sort_values()
-
-            print(f"└─ 状态性能排序 (Optimality Gap %):")
-            for i, (state, perf) in enumerate(state_performance.items(), 1):
-                status = "🏆" if i == 1 else "📉" if i == len(state_performance) else "📊"
-                print(f"   {status} {i}. {state}: {perf:.3f}%")
-
-        # 组件贡献度分析
-        if len(self.contributions) > 0:
-            print(f"\n🎯 组件贡献度分析:")
-
-            # 边际贡献分析
-            marginal_cols = [col for col in self.contributions.columns if 'marginal_contribution' in col]
-            if marginal_cols:
-                print(f"├─ 边际贡献度排序:")
-                marginal_data = self.contributions[marginal_cols].mean().abs().sort_values(ascending=False)
-                for i, (col, contrib) in enumerate(marginal_data.items(), 1):
-                    component = col.replace('_marginal_contribution', '')
-                    print(f"│  {i}. {component}: {contrib:.4f}")
-
-            # 交互效应分析
-            interaction_cols = [col for col in self.contributions.columns if 'interaction' in col]
-            if interaction_cols:
-                print(f"├─ 主要交互效应:")
-                interaction_data = self.contributions[interaction_cols].mean().abs().sort_values(ascending=False)
-                for col, effect in interaction_data.head(3).items():
-                    components = col.replace('_interaction', '').replace('_', ' & ')
-                    print(f"│  {components}: {effect:.4f}")
-
-        # 统计显著性总结
-        print(f"\n📊 统计显著性总结:")
-        print(f"├─ 显著性消融组合: 基于t检验和效应量分析")
-        print(f"├─ 关键发现: visited_mask和current_city_onehot为核心组件")
-        print(f"└─ 建议: 优先保留访问状态和位置信息组件")
-
-        # 实践建议
-        print(f"\n💡 实践建议:")
-        print(f"├─ 模型简化: 可考虑移除distances_from_current组件")
-        print(f"├─ 性能权衡: order_embedding对性能影响中等")
-        print(f"├─ 计算效率: 最小状态组合可降低50%+计算开销")
-        print(f"└─ 鲁棒性: 建议保留visited_mask + current_city_onehot核心组合")
-
-        print("\n" + "=" * 100)
-        print(" " * 35 + "实验分析完成 - 博士水准消融研究")
-        print("=" * 100)
-
-    #
-    # def plot_comprehensive_ablation_analysis(self, pathway_analysis=None):
-    #     """绘制综合消融分析图 - 统一以groupby为单位进行绘制"""
-    #     print("绘制综合消融分析图...")
-    #
-    #     # 按['algorithm', 'city_num', 'mode', 'train_test']分组
-    #     grouped_data = self.contributions.groupby(['algorithm', 'city_num', 'mode', 'train_test'])
-    #
-    #     plot_count = 0
-    #     for group_name, group_data in grouped_data:
-    #         if plot_count >= 6:  # 最多绘制6个组
-    #             break
-    #
-    #         print(f"处理组合: {group_name}")
-    #
-    #         # 为每个组合创建一个大图
-    #         fig, axes = plt.subplots(2, 3, figsize=(24, 16))
-    #         fig.suptitle(f'{group_name[0]} | {group_name[1]} | {group_name[2]} |  {group_name[3]}',
-    #                     fontsize=16, fontweight='bold')
-    #
-    #
-    #         try:
-    #             # 1. 组件边际贡献分析
-    #             self._plot_marginal_contributions_for_group(axes[0, 0], group_data)
-    #
-    #             # 2. 组件交互效应热力图
-    #             self._plot_interaction_heatmap_for_group(axes[0, 1], group_data)
-    #
-    #             # 3. 统计显著性检验结果
-    #             self._plot_significance_tests_for_group(axes[0, 2], group_data)
-    #
-    #             # 4. 消融路径比较
-    #             self._plot_ablation_pathways_comparison_for_group(axes[1, 0], group_data, pathway_analysis)
-    #
-    #             # 5. 组件重要性排序
-    #             self._plot_importance_ranking_for_group(axes[1, 1], group_data)
-    #
-    #             # 6. 性能退化分析
-    #             self._plot_degradation_from_pathway_data_for_group(axes[1, 2], group_data, pathway_analysis)
-    #
-    #             plt.tight_layout()
-    #
-    #             # 保存每个组合的图片
-    #             filename = f'comprehensive_ablation_analysis_{group_name[0]}_{group_name[1]}_{group_name[2]}_{group_name[3]}.png'
-    #             plt.savefig(filename, dpi=300, bbox_inches='tight')
-    #             # plt.show()
-    #             break
-    #             plot_count += 1
-    #
-    #         except Exception as e:
-    #             print(f"绘制组合 {group_name} 时出现错误: {e} {traceback.format_exc()} ")
-    #             plt.close()
-    #             continue
     def plot_comprehensive_ablation_analysis(self, pathway_analysis=None):
         """绘制综合消融分析图 - 统一以groupby为单位进行绘制"""
         print("绘制综合消融分析图...")
 
-        # 按['algorithm', 'city_num', 'mode', 'train_test']分组
         grouped_data = self.contributions.groupby(['algorithm', 'city_num', 'mode', 'train_test'])
-
         plot_count = 0
         for group_name, group_data in grouped_data:
             if plot_count >= 6:  # 最多绘制6个组
                 break
-
             print(f"处理组合: {group_name}")
-
             # 为每个组合创建一个大图
             fig, axes = plt.subplots(3, 2, figsize=(30, 24))  # 修改为 3x2 布局，增大画布尺寸以减少拥挤
             fig.suptitle(f'{group_name[0]} | {group_name[1]} | {group_name[2]} |  {group_name[3]}',
                          fontsize=16, fontweight='bold')
 
             try:
-                # 1. 组件边际贡献分析
                 self._plot_marginal_contributions_for_group(axes[0, 0], group_data)
-
-                # 2. 组件交互效应热力图
                 self._plot_interaction_heatmap_for_group(axes[0, 1], group_data)
-
-                # 3. 统计显著性检验结果
                 self._plot_significance_tests_for_group(axes[1, 0], group_data)
-
-                # 4. 消融路径比较
                 self._plot_ablation_pathways_comparison_for_group(axes[1, 1], group_data, pathway_analysis)
-
-                # 5. 组件重要性排序
                 self._plot_importance_ranking_for_group(axes[2, 0], group_data)
-
-                # 6. 性能退化分析
                 self._plot_degradation_from_pathway_data_for_group(axes[2, 1], group_data, pathway_analysis)
 
                 # 修改标题字体大小和 pad 值以避免重叠
@@ -1164,11 +764,8 @@ class TSPAdvancedVisualizationSuite:
                 plt.tight_layout()
                 plt.subplots_adjust(hspace=0.3, wspace=0.3)  # 增加子图间距以避免标题重叠
 
-                # 保存每个组合的图片
                 filename = f'comprehensive_ablation_analysis_{group_name[0]}_{group_name[1]}_{group_name[2]}_{group_name[3]}.png'
                 plt.savefig(filename, dpi=300, bbox_inches='tight')
-                # plt.show()
-                # break
                 plot_count += 1
 
             except Exception as e:
@@ -1605,76 +1202,6 @@ class TSPAdvancedVisualizationSuite:
                     ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Ablation Pathway Comparison')
 
-    # def _plot_ablation_pathways_comparison_for_group(self, ax, group_data, pathway_analysis):
-    #     """为特定组合绘制消融路径比较图"""
-    #     try:
-    #         if pathway_analysis is None or len(pathway_analysis) == 0:
-    #             ax.text(0.5, 0.5, 'No pathway data available',
-    #                     ha='center', va='center', transform=ax.transAxes)
-    #             ax.set_title('Ablation Pathway Comparison')
-    #             return
-    #
-    #         # 获取当前组合的标识信息
-    #         group_info = group_data.iloc[0] if len(group_data) > 0 else None
-    #         if group_info is None:
-    #             ax.text(0.5, 0.5, 'No group data available',
-    #                     ha='center', va='center', transform=ax.transAxes)
-    #             ax.set_title('Ablation Pathway Comparison')
-    #             return
-    #
-    #         # 筛选对应组合的路径数据
-    #         path_subset = pathway_analysis[
-    #             (pathway_analysis['algorithm'] == group_info['algorithm']) &
-    #             (pathway_analysis['city_num'] == group_info['city_num']) &
-    #             (pathway_analysis['mode'] == group_info['mode']) &
-    #             (pathway_analysis['train_test'] == group_info['train_test']) &
-    #             (pathway_analysis['pathway_type'] == 'ablation_sequence') &
-    #             (pathway_analysis['pathway_length'] > 1)
-    #         ]
-    #
-    #         if len(path_subset) == 0:
-    #             ax.text(0.5, 0.5, 'No valid pathway sequences found',
-    #                     ha='center', va='center', transform=ax.transAxes)
-    #             ax.set_title('Ablation Pathway Comparison')
-    #             return
-    #
-    #         # 计算需要的颜色数量并动态生成颜色
-    #         n_colors = min(len(path_subset), 6)  # 最多显示6条路径
-    #         colors = self._get_dynamic_colors(n_colors, 'qualitative')
-    #
-    #         for i, (_, row) in enumerate(path_subset.iterrows()):
-    #             if i >= n_colors:
-    #                 break
-    #
-    #             pathway_name = row['pathway_name']
-    #
-    #             try:
-    #                 perf_list_str = row['pathway_performance_list']
-    #                 if perf_list_str and perf_list_str != '[]':
-    #                     perf_list = eval(perf_list_str) if isinstance(perf_list_str, str) else perf_list_str
-    #
-    #                     if len(perf_list) > 1:
-    #                         x_values = list(range(len(perf_list)))
-    #                         ax.plot(x_values, perf_list,
-    #                                 color=colors[i], marker='o',
-    #                                 label=f'{pathway_name} (Total: {row["total_degradation"]:.1f}%)',
-    #                                 linewidth=2, markersize=6)
-    #             except Exception as e:
-    #                 print(f"Error parsing pathway data for {pathway_name}: {e} {traceback.format_exc()} ")
-    #                 continue
-    #
-    #         ax.set_xlabel('Ablation Steps')
-    #         ax.set_ylabel('Performance (Optimality Gap %)')
-    #         ax.set_title('Ablation Pathway Comparison')
-    #         ax.legend()
-    #         ax.grid(True, alpha=0.3)
-    #
-    #     except Exception as e:
-    #         print(f"Error in pathway plotting: {e} {traceback.format_exc()} ")
-    #         ax.text(0.5, 0.5, f'Plotting error: {str(e)[:50]}...',
-    #                 ha='center', va='center', transform=ax.transAxes)
-    #         ax.set_title('Ablation Pathway Comparison')
-
     def _plot_marginal_contributions_for_group(self, ax, group_data):
         """为特定组合绘制边际贡献图"""
         if len(group_data) == 0:
@@ -1710,266 +1237,9 @@ class TSPAdvancedVisualizationSuite:
         ax.set_ylabel('Performance Impact')
         ax.grid(True, alpha=0.3)
 
-    def plot_component_contribution_radar(self):
-        """绘制基于真实数据的组件贡献雷达图"""
-        print("绘制组件贡献雷达图...")
-
-        try:
-            if len(self.contributions) == 0:
-                print("No contribution data available for radar chart")
-                return
-
-            # 从真实数据中提取组件贡献信息
-            marginal_cols = [col for col in self.contributions.columns if 'marginal_contribution' in col]
-            if not marginal_cols:
-                print("No marginal contribution data available for radar chart")
-                return
-
-            # 提取组件名称
-            component_names = []
-            for col in marginal_cols:
-                component = col.replace('_marginal_contribution', '').replace('_', ' ').title()
-                component_names.append(component)
-
-            # 按算法分组获取贡献度数据
-            algorithms = self.contributions['algorithm'].unique()
-
-            if len(algorithms) == 0:
-                print("No algorithm data available for radar chart")
-                return
-
-            # 动态确定要显示的算法数量（最多显示4个）
-            display_algorithms = algorithms[:min(4, len(algorithms))]
-            n_algorithms = len(display_algorithms)
-
-            # 创建子图布局
-            if n_algorithms == 1:
-                fig, axes = plt.subplots(1, 1, figsize=(10, 10), subplot_kw={'projection': 'polar'})
-                axes = [axes]
-            elif n_algorithms == 2:
-                fig, axes = plt.subplots(1, 2, figsize=(20, 10), subplot_kw={'projection': 'polar'})
-            elif n_algorithms <= 4:
-                fig, axes = plt.subplots(2, 2, figsize=(20, 20), subplot_kw={'projection': 'polar'})
-                axes = axes.flatten()
-            else:
-                fig, axes = plt.subplots(2, 3, figsize=(24, 16), subplot_kw={'projection': 'polar'})
-                axes = axes.flatten()
-
-            # 设置角度
-            angles = np.linspace(0, 2 * np.pi, len(component_names), endpoint=False).tolist()
-            angles += angles[:1]  # 闭合图形
-
-            # 颜色方案
-            colors = plt.cm.Set3(np.linspace(0, 1, n_algorithms))
-
-            for i, algorithm in enumerate(display_algorithms):
-                if i >= len(axes):
-                    break
-
-                ax = axes[i]
-
-                # 获取该算法的贡献度数据
-                algo_data = self.contributions[self.contributions['algorithm'] == algorithm]
-
-                if len(algo_data) == 0:
-                    ax.text(0.5, 0.5, f'No data for {algorithm}',
-                            ha='center', va='center', transform=ax.transAxes)
-                    ax.set_title(f'{algorithm} - No Data', size=14, fontweight='bold')
-                    continue
-
-                # 计算各组件的平均贡献度
-                component_values = []
-                for col in marginal_cols:
-                    if col in algo_data.columns:
-                        # 使用绝对值并归一化到0-1范围
-                        value = abs(algo_data[col].mean())
-                        component_values.append(value)
-                    else:
-                        component_values.append(0.0)
-
-                # 归一化到0-1范围
-                if max(component_values) > 0:
-                    max_val = max(component_values)
-                    normalized_values = [v / max_val for v in component_values]
-                else:
-                    normalized_values = component_values
-
-                # 闭合雷达图
-                radar_values = normalized_values + normalized_values[:1]
-
-                # 绘制雷达图
-                ax.plot(angles, radar_values, 'o-', linewidth=3,
-                        label=algorithm, color=colors[i], markersize=8)
-                ax.fill(angles, radar_values, alpha=0.25, color=colors[i])
-
-                # 设置标签
-                ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(component_names, fontsize=10)
-
-                # 设置径向标签
-                ax.set_ylim(0, 1)
-                ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
-                ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=8)
-                ax.grid(True)
-
-                # 添加数值标签
-                for angle, value, name in zip(angles[:-1], normalized_values, component_names):
-                    ax.text(angle, value + 0.05, f'{value:.2f}',
-                            ha='center', va='center', fontsize=8, fontweight='bold')
-
-                # 设置标题，包含实际的贡献度统计信息
-                mean_contribution = np.mean(component_values)
-                max_contribution = max(component_values)
-                ax.set_title(f'{algorithm}\nMean: {mean_contribution:.3f}, Max: {max_contribution:.3f}',
-                             size=12, fontweight='bold', pad=20)
-
-            # 隐藏多余的子图
-            for j in range(n_algorithms, len(axes)):
-                axes[j].set_visible(False)
-
-            # 添加总体图例和统计信息
-            if n_algorithms > 1:
-                # 在图外添加整体统计信息
-                fig.suptitle('Component Contribution Radar Analysis\nBased on Marginal Contribution Data',
-                             fontsize=16, fontweight='bold', y=0.95)
-
-                # 计算跨算法的组件重要性排序
-                overall_importance = {}
-                for i, col in enumerate(marginal_cols):
-                    component = component_names[i]
-                    overall_value = abs(self.contributions[col].mean())
-                    overall_importance[component] = overall_value
-
-                # 排序并添加文本说明
-                sorted_importance = sorted(overall_importance.items(), key=lambda x: x[1], reverse=True)
-                importance_text = "Overall Component Ranking:\n" + \
-                                  "\n".join([f"{i + 1}. {comp}: {val:.3f}"
-                                             for i, (comp, val) in enumerate(sorted_importance)])
-
-                fig.text(0.02, 0.02, importance_text, fontsize=10,
-                         bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
-
-            plt.tight_layout()
-            plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            # plt.show()
-
-            # 打印详细的数据分析结果
-            print("\n" + "=" * 60)
-            print("组件贡献雷达图数据分析")
-            print("=" * 60)
-
-            for algorithm in display_algorithms:
-                algo_data = self.contributions[self.contributions['algorithm'] == algorithm]
-                if len(algo_data) > 0:
-                    print(f"\n算法: {algorithm}")
-                    print("-" * 30)
-
-                    for i, col in enumerate(marginal_cols):
-                        component = component_names[i]
-                        if col in algo_data.columns:
-                            mean_val = algo_data[col].mean()
-                            std_val = algo_data[col].std()
-                            print(f"{component}: {mean_val:.4f} (±{std_val:.4f})")
-
-            print("=" * 60)
-
-        except Exception as e:
-            print(f"绘制雷达图时出现错误: {e} {traceback.format_exc()} ")
-            print(f"详细错误信息: {traceback.format_exc()}")
-
-            # 创建一个简单的错误提示图
-            fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-            ax.text(0.5, 0.5, f'Error generating radar chart:\n{str(e)[:100]}...',
-                    ha='center', va='center', transform=ax.transAxes,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor="lightcoral", alpha=0.8))
-            ax.set_title('Component Contribution Radar Chart - Error', fontsize=14)
-            ax.axis('off')
-            plt.savefig('component_contribution_radar.png', dpi=300, bbox_inches='tight')
-            # plt.show()
-
-    def generate_advanced_summary_report(self):
-        """生成高级总结报告"""
-        print("\n" + "=" * 100)
-        print(" " * 30 + "TSP深度强化学习高级消融实验分析报告")
-        print("=" * 100)
-
-        # 实验设计概述
-        print(f"\n📊 实验设计概述:")
-        print(f"├─ 状态组合总数: {len(map_state_types)} 种")
-        print(f"├─ 基础状态组件: {', '.join(full_states)}")
-        print(f"├─ 消融策略: 系统性单组件/双组件移除")
-        # print(f"└─ 数据集规模: {len(self.analyzer.df):,} 条记录")
-
-        # 状态组合详细信息
-        print(f"\n🔬 消融实验状态组合:")
-        for state_type, components in map_state_types.items():
-            missing_components = set(full_states) - set(components)
-            if missing_components:
-                print(f"├─ {state_type}: 移除 {', '.join(missing_components)}")
-            else:
-                print(f"├─ {state_type}: 完整状态 (基线)")
-
-        # 性能分析结果
-        if len(self.performance_metrics) > 0:
-            print(f"\n📈 性能分析结果:")
-            state_performance = self.performance_metrics.groupby('state_type')[
-                'optimality_gap_mean'].mean().sort_values()
-
-            print(f"└─ 状态性能排序 (Optimality Gap %):")
-            for i, (state, perf) in enumerate(state_performance.items(), 1):
-                status = "🏆" if i == 1 else "📉" if i == len(state_performance) else "📊"
-                print(f"   {status} {i}. {state}: {perf:.3f}%")
-
-        # 组件贡献度分析
-        if len(self.contributions) > 0:
-            print(f"\n🎯 组件贡献度分析:")
-
-            # 边际贡献分析
-            marginal_cols = [col for col in self.contributions.columns if 'marginal_contribution' in col]
-            if marginal_cols:
-                print(f"├─ 边际贡献度排序:")
-                marginal_data = self.contributions[marginal_cols].mean().abs().sort_values(ascending=False)
-                for i, (col, contrib) in enumerate(marginal_data.items(), 1):
-                    component = col.replace('_marginal_contribution', '')
-                    print(f"│  {i}. {component}: {contrib:.4f}")
-
-            # 交互效应分析
-            interaction_cols = [col for col in self.contributions.columns if 'interaction' in col]
-            if interaction_cols:
-                print(f"├─ 主要交互效应:")
-                interaction_data = self.contributions[interaction_cols].mean().abs().sort_values(ascending=False)
-                for col, effect in interaction_data.head(3).items():
-                    components = col.replace('_interaction', '').replace('_', ' & ')
-                    print(f"│  {components}: {effect:.4f}")
-
-        # 统计显著性总结
-        print(f"\n📊 统计显著性总结:")
-        print(f"├─ 显著性消融组合: 基于t检验和效应量分析")
-        print(f"├─ 关键发现: visited_mask和current_city_onehot为核心组件")
-        print(f"└─ 建议: 优先保留访问状态和位置信息组件")
-
-        # 实践建议
-        print(f"\n💡 实践建议:")
-        print(f"├─ 模型简化: 可考虑移除distances_from_current组件")
-        print(f"├─ 性能权衡: order_embedding对性能影响中等")
-        print(f"├─ 计算效率: 最小状态组合可降低50%+计算开销")
-        print(f"└─ 鲁棒性: 建议保留visited_mask + current_city_onehot核心组合")
-
-        print("\n" + "=" * 100)
-        print(" " * 35 + "实验分析完成 - 博士水准消融研究")
-        print("=" * 100)
-
 
 def generate_performance_files(input_files):
-    """
-    生成性能分析文件
-    
-    Args:
-        input_files (list): 输入CSV文件列表
-    
-    Returns:
-        dict: 包含生成的文件路径的字典
-    """
+
     generated_files = {}
     
     for i,f in enumerate(input_files):
@@ -1983,8 +1253,9 @@ def generate_performance_files(input_files):
                 'total_reward', 'current_distance', 'optimal_distance',
                 'state_values',
             ]
-            
-            df = pd.read_csv(f, usecols=columns)
+            dtype_dict = {'instance_id': str}
+
+            df = pd.read_csv(f, usecols=columns, dtype=dtype_dict)
             print(f"完成：读取csv {f}，数据形状: {df.shape}")
             # df=None
             
@@ -2028,12 +1299,7 @@ def generate_performance_files(input_files):
 
 
 def generate_visualization_plots(performance_files_dict):
-    """
-    基于性能文件生成可视化图表
 
-    Args:
-        performance_files_dict (dict): 由generate_performance_files生成的文件路径字典
-    """
     for input_file, file_paths in performance_files_dict.items():
         print(f"为文件 {input_file} 生成可视化图表...")
 
@@ -2051,10 +1317,10 @@ def generate_visualization_plots(performance_files_dict):
             viz_suite.plot_comprehensive_ablation_analysis(pathway_analysis)
 
             # 组件贡献雷达图
-            viz_suite.plot_component_contribution_radar()
-
-            # 生成高级总结报告
-            viz_suite.generate_advanced_summary_report()
+            # viz_suite.plot_component_contribution_radar()
+            #
+            # # 生成高级总结报告
+            # viz_suite.generate_advanced_summary_report()
 
             print(f"文件 {input_file} 的可视化图表生成完成\n")
 
@@ -2071,8 +1337,7 @@ def run():
         # 步骤1: 生成性能分析文件
         if is_generate:
             files = [
-                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250803_154544/experiment_data_20250803_154544.csv',
-                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_cross_instance_20250803_154544/experiment_data_20250803_154544.csv']
+                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250803_164742/experiment_data_20250803_164742.csv']
             print(f"待处理文件: {files}")
 
 
@@ -2100,14 +1365,10 @@ def run():
             }
 
         # 步骤2: 生成可视化图表
-        print("\n" + "=" * 60)
-        print("步骤2: 生成可视化图表")
-        print("=" * 60)
-        generate_visualization_plots(generated_files)
 
-        print("\n" + "=" * 60)
-        print("所有处理完成!")
-        print("=" * 60)
+        print("步骤2: 生成可视化图表")
+
+        generate_visualization_plots(generated_files)
 
     except Exception as e:
         print(f"主程序执行出错: {e}")
