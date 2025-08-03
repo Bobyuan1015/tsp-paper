@@ -114,9 +114,7 @@ class ExperimentRunner:
         # Progress tracking
         self.total_tasks = 0
         self.completed_tasks = 0
-        
-        # Progress callback for external monitoring
-        self.progress_callback = None
+
         
     def _set_global_seed(self, seed: int):
         """Set global random seed for reproducibility."""
@@ -251,6 +249,7 @@ class ExperimentRunner:
                 # Load pre-split dataset
                 dataset = self.dataset_loader.load_random_dataset(city_num, split='both')
                 train_data = dataset['train']
+
                 test_data = dataset['test']
                 
                 for state_type in state_types:
@@ -259,60 +258,54 @@ class ExperimentRunner:
                     state_components = config_loader.get_state_type_config(state_type)
                     state_dim = self.calculate_state_dim(state_components, city_num)
                     
-                    if mode == "per_instance":
-                        self._run_per_instance_training(
-                            algorithm, city_num, state_type, state_components, state_dim,
-                            train_data, test_data, repeat_runs, episodes_training,
-                            save_model_every, evaluate_every
-                        )
-                    else:  # cross_instance
-                        self._run_cross_instance_training(
-                            algorithm, city_num, state_type, state_components, state_dim,
-                            train_data, test_data, repeat_runs, episodes_training,
-                            save_model_every, evaluate_every
-                        )
+                    # Use unified training function for both modes
+                    self._run_unified_training(
+                        algorithm, city_num, state_type, state_components, state_dim,
+                        train_data, test_data, repeat_runs, episodes_training,
+                        save_model_every, evaluate_every, mode
+                    )
 
     def _run_unified_training(self, algorithm: str, city_num: int, state_type: str,
                             state_components: List[str], state_dim: int, train_data: List,
                             test_data: List, repeat_runs: int, episodes_training: int,
                             save_model_every: int, evaluate_every: int, mode: str):
         """Handle unified training logic for both per_instance and cross_instance modes."""
-        
 
-        
+
         for index_instance_id, instance_data in enumerate(train_data):
-            instance_id = instance_data.get('instance_id', '无')
-            
+
             for run_id in range(repeat_runs):
                 self.completed_tasks += 1
-                
+                agent = self.create_agent(algorithm, state_dim, city_num, state_components)
                 # Calculate local progress
                 if mode == "per_instance":
+                    instance_id = instance_data.get('instance_id', '无')
+
                     total_instance_runs = len(train_data) * repeat_runs
                     current_instance_run = index_instance_id * repeat_runs + run_id + 1
                     local_progress = (current_instance_run / total_instance_runs) * 100
-                    progress_msg = f"Instance {instance_id + 1}/{len(train_data)}, Run {run_id + 1}/{repeat_runs}"
-                    total_instances_for_log = len(train_data)
+                    # Create environment and agent
+                    env = self.dataset_loader.create_env_from_instance(instance_data, state_components)
                 else:  # cross_instance
-                    local_progress = ((run_id + 1) / repeat_runs) * 100
-                    progress_msg = f"Cross Instance Run {run_id + 1}/{repeat_runs}"
-                    total_instances_for_log = 1
+                    if index_instance_id >0:
+                        print("CROSS 此轮结束")
+                        return
+                    instance_id = str([d['instance_id'] for d in train_data])
+                    current_instance_run = run_id + 1
+                    local_progress = (current_instance_run / repeat_runs) * 100
+                    # Create environment and agent
+                    env = train_data
+
+                total_instances_for_log = len(train_data)
                 
-                # Update external progress if callback available
-                if hasattr(self, 'progress_callback') and self.progress_callback:
-                    self.progress_callback(self.completed_tasks, self.total_tasks, progress_msg)
-                
+
                 self.logger.log_experiment_progress(
                     algorithm, city_num, mode, 
-                    instance_id + 1, total_instances_for_log, run_id + 1, repeat_runs, index_instance_id,
+                    instance_id, total_instances_for_log, run_id + 1, repeat_runs, index_instance_id,
                     self.completed_tasks, self.total_tasks
                 )
                 self.logger.logger.info(f"Local Progress: {run_id + 1 if mode == 'cross_instance' else current_instance_run}/{repeat_runs if mode == 'cross_instance' else total_instance_runs} ({local_progress:.1f}%)")
-                
-                # Create environment and agent
-                env = self.dataset_loader.create_env_from_instance(instance_data, state_components)
-                agent = self.create_agent(algorithm, state_dim, city_num, state_components)
-                
+
                 # Create model manager
                 model_dir = os.path.join(
                     self.logger.get_experiment_dir(), "models", 
@@ -354,27 +347,6 @@ class ExperimentRunner:
                         test_instance_id, run_id, state_type, "test", model_manager
                     )
 
-    def _run_per_instance_training(self, algorithm: str, city_num: int, state_type: str,
-                                  state_components: List[str], state_dim: int, train_data: List,
-                                  test_data: List, repeat_runs: int, episodes_training: int,
-                                  save_model_every: int, evaluate_every: int):
-        """Handle per-instance training logic."""
-        return self._run_unified_training(
-            algorithm, city_num, state_type, state_components, state_dim,
-            train_data, test_data, repeat_runs, episodes_training,
-            save_model_every, evaluate_every, "per_instance"
-        )
-
-    def _run_cross_instance_training(self, algorithm: str, city_num: int, state_type: str,
-                                   state_components: List[str], state_dim: int, train_data: List,
-                                   test_data: List, repeat_runs: int, episodes_training: int,
-                                   save_model_every: int, evaluate_every: int):
-        """Handle cross-instance training logic."""
-        return self._run_unified_training(
-            algorithm, city_num, state_type, state_components, state_dim,
-            train_data, test_data, repeat_runs, episodes_training,
-            save_model_every, evaluate_every, "cross_instance"
-        )
 
     def run_per_instance_mode(self):
         """Run per-instance training mode."""
@@ -398,11 +370,11 @@ class ExperimentRunner:
                 env = self.dataset_loader.create_env_from_instance(
                     instance_data, state_components
                 )
-                current_instance_id = 0  # Use 0 for cross-instance logging
+
             else:
                 # Single instance training
                 env = env_or_data
-                current_instance_id = instance_id
+            current_instance_id = instance_id
             
             state = env.reset()
             agent.reset_episode()
