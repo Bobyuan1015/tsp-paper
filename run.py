@@ -293,14 +293,13 @@ class ExperimentRunner:
                     instance_id = str([d['instance_id'] for d in train_data])
                     current_instance_run = run_id + 1
                     local_progress = (current_instance_run / repeat_runs) * 100
-                    # Create environment and agent
                     env = train_data
 
                 total_instances_for_log = len(train_data)
-                
+
 
                 self.logger.log_experiment_progress(
-                    algorithm, city_num, mode, 
+                    algorithm, city_num, mode,
                     instance_id, total_instances_for_log, run_id + 1, repeat_runs, index_instance_id,
                     self.completed_tasks, self.total_tasks
                 )
@@ -308,17 +307,17 @@ class ExperimentRunner:
 
                 # Create model manager
                 model_dir = os.path.join(
-                    self.logger.get_experiment_dir(), "models", 
+                    self.logger.get_experiment_dir(), "models",
                     algorithm, f"{city_num}cities", state_type, mode,
                     f"instance_{instance_id}_run_{run_id}"
                 )
                 model_manager = ModelManager(model_dir, keep_recent=10)
-                
+
                 # Train agent
                 self._train_agent(
-                    agent, env, episodes_training, algorithm, 
-                    city_num, mode, instance_id, run_id, 
-                    state_type, "train", model_manager, 
+                    agent, env, episodes_training, algorithm,
+                    city_num, mode, instance_id, run_id,
+                    state_type, "train", model_manager,
                     save_model_every, evaluate_every, state_components
                 )
                 
@@ -326,25 +325,27 @@ class ExperimentRunner:
                 for index_test_instance_id in range(len(test_data)):
                     test_instance_data = test_data[index_test_instance_id]
                     test_instance_id = test_instance_data.get('instance_id', '无')
+                    # print(f'{algorithm} {mode} {state_type}  {city_num} index_instance_id={index_instance_id} run_id={run_id} index_test_instance_id={index_test_instance_id}     instance_id={instance_id}   test_instance_id={test_instance_id}')
+
                     self.completed_tasks += 1
-                    
+
                     test_progress = ((index_test_instance_id + 1) / len(test_data)) * 100
                     self.logger.logger.info(f"Testing instance {index_test_instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
-                    
+
                     # Log testing progress
                     self.logger.log_experiment_progress(
                         algorithm, city_num, f"{mode}_testing",
                         test_instance_id, len(test_data), 1, 1, index_test_instance_id,
                         self.completed_tasks, self.total_tasks
                     )
-                    
+
                     # Create fresh environment for zero-shot test
                     test_env = self.dataset_loader.create_env_from_instance(test_instance_data, state_components)
-                    
+
                     # Zero-shot test (single episode with trained agent using best model)
                     self._zero_shot_test(
                         agent, test_env, algorithm, city_num, mode,
-                        test_instance_id, run_id, state_type, "test", model_manager
+                        f"train_{instance_id}_test_{test_instance_id}", run_id, state_type, "test", model_manager
                     )
 
 

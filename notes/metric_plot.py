@@ -199,19 +199,19 @@ class TSPAdvancedAblationAnalyzer:
 
         self.results = {}
 
-    def calculate_performance_metrics(self, df=None) -> pd.DataFrame:
+    def calculate_performance_metrics(self, df=None,i=0) -> pd.DataFrame:
         """计算核心性能指标"""
         print("计算性能指标...")
         # todo
-        # episode_data = df[df['done'] == 1].copy()
-        # episode_data['optimality_gap'] = (
-        #         (episode_data['current_distance'] - episode_data['optimal_distance']) /
-        #         episode_data['optimal_distance'] * 100
-        # )
-        # episode_data.to_csv('t3.csv', index=False)
+        episode_data = df[(df['done'] == 1) & (df['train_test'] == 'train')].copy()
+        episode_data['optimality_gap'] = (
+                (episode_data['current_distance'] - episode_data['optimal_distance']) /
+                episode_data['optimal_distance'] * 100
+        )
+        episode_data.to_csv(f'{i}_t3.csv', index=False)
 
 
-        episode_data= pd.read_csv('t3.csv')
+        # episode_data= pd.read_csv('t3.csv')
 
         # 第一次分组聚合，并设置列名前缀为 "instance_"
         metrics = episode_data.groupby(
@@ -1984,14 +1984,14 @@ def generate_performance_files(input_files):
                 'state_values',
             ]
             
-            # df = pd.read_csv(f, usecols=columns)
-            # print(f"完成：读取csv {f}，数据形状: {df.shape}")
-            df=None
+            df = pd.read_csv(f, usecols=columns)
+            print(f"完成：读取csv {f}，数据形状: {df.shape}")
+            # df=None
             
             analyzer = TSPAdvancedAblationAnalyzer()
 
             print("计算性能指标...")
-            performance_metrics = analyzer.calculate_performance_metrics(df)
+            performance_metrics = analyzer.calculate_performance_metrics(df,i)
             perf_filename = f'{i}_performance_metrics.csv'
             performance_metrics.to_csv(perf_filename, index=False)
             print(f"性能指标已保存到: {perf_filename}")
@@ -2071,8 +2071,8 @@ def run():
         # 步骤1: 生成性能分析文件
         if is_generate:
             files = [
-                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_cross_instance_20250730_000205/experiment_data_20250730_000205.csv',
-                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250730_000205/experiment_data_20250730_000205.csv']
+                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250803_154544/experiment_data_20250803_154544.csv',
+                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_cross_instance_20250803_154544/experiment_data_20250803_154544.csv']
             print(f"待处理文件: {files}")
 
 
@@ -2086,6 +2086,7 @@ def run():
                 print(f"文件 {input_file} 生成的文件:")
                 for file_type, file_path in file_paths.items():
                     print(f"  - {file_type}: {file_path}")
+            print(generated_files)
         else:
             generated_files = {
                 'cross.csv':
