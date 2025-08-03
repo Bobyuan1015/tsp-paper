@@ -272,155 +272,109 @@ class ExperimentRunner:
                             save_model_every, evaluate_every
                         )
 
+    def _run_unified_training(self, algorithm: str, city_num: int, state_type: str,
+                            state_components: List[str], state_dim: int, train_data: List,
+                            test_data: List, repeat_runs: int, episodes_training: int,
+                            save_model_every: int, evaluate_every: int, mode: str):
+        """Handle unified training logic for both per_instance and cross_instance modes."""
+        
+
+        
+        for index_instance_id, instance_data in enumerate(train_data):
+            instance_id = instance_data.get('instance_id', '无')
+            
+            for run_id in range(repeat_runs):
+                self.completed_tasks += 1
+                
+                # Calculate local progress
+                if mode == "per_instance":
+                    total_instance_runs = len(train_data) * repeat_runs
+                    current_instance_run = index_instance_id * repeat_runs + run_id + 1
+                    local_progress = (current_instance_run / total_instance_runs) * 100
+                    progress_msg = f"Instance {instance_id + 1}/{len(train_data)}, Run {run_id + 1}/{repeat_runs}"
+                    total_instances_for_log = len(train_data)
+                else:  # cross_instance
+                    local_progress = ((run_id + 1) / repeat_runs) * 100
+                    progress_msg = f"Cross Instance Run {run_id + 1}/{repeat_runs}"
+                    total_instances_for_log = 1
+                
+                # Update external progress if callback available
+                if hasattr(self, 'progress_callback') and self.progress_callback:
+                    self.progress_callback(self.completed_tasks, self.total_tasks, progress_msg)
+                
+                self.logger.log_experiment_progress(
+                    algorithm, city_num, mode, 
+                    instance_id + 1, total_instances_for_log, run_id + 1, repeat_runs, index_instance_id,
+                    self.completed_tasks, self.total_tasks
+                )
+                self.logger.logger.info(f"Local Progress: {run_id + 1 if mode == 'cross_instance' else current_instance_run}/{repeat_runs if mode == 'cross_instance' else total_instance_runs} ({local_progress:.1f}%)")
+                
+                # Create environment and agent
+                env = self.dataset_loader.create_env_from_instance(instance_data, state_components)
+                agent = self.create_agent(algorithm, state_dim, city_num, state_components)
+                
+                # Create model manager
+                model_dir = os.path.join(
+                    self.logger.get_experiment_dir(), "models", 
+                    algorithm, f"{city_num}cities", state_type, mode,
+                    f"instance_{instance_id}_run_{run_id}"
+                )
+                model_manager = ModelManager(model_dir, keep_recent=10)
+                
+                # Train agent
+                self._train_agent(
+                    agent, env, episodes_training, algorithm, 
+                    city_num, mode, instance_id, run_id, 
+                    state_type, "train", model_manager, 
+                    save_model_every, evaluate_every, state_components
+                )
+                
+                # Zero-shot testing on test instances
+                for index_test_instance_id in range(len(test_data)):
+                    test_instance_data = test_data[index_test_instance_id]
+                    test_instance_id = test_instance_data.get('instance_id', '无')
+                    self.completed_tasks += 1
+                    
+                    test_progress = ((index_test_instance_id + 1) / len(test_data)) * 100
+                    self.logger.logger.info(f"Testing instance {index_test_instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
+                    
+                    # Log testing progress
+                    self.logger.log_experiment_progress(
+                        algorithm, city_num, f"{mode}_testing",
+                        test_instance_id, len(test_data), 1, 1, index_test_instance_id,
+                        self.completed_tasks, self.total_tasks
+                    )
+                    
+                    # Create fresh environment for zero-shot test
+                    test_env = self.dataset_loader.create_env_from_instance(test_instance_data, state_components)
+                    
+                    # Zero-shot test (single episode with trained agent using best model)
+                    self._zero_shot_test(
+                        agent, test_env, algorithm, city_num, mode,
+                        test_instance_id, run_id, state_type, "test", model_manager
+                    )
+
     def _run_per_instance_training(self, algorithm: str, city_num: int, state_type: str,
                                   state_components: List[str], state_dim: int, train_data: List,
                                   test_data: List, repeat_runs: int, episodes_training: int,
                                   save_model_every: int, evaluate_every: int):
         """Handle per-instance training logic."""
-        # Per-instance training
-        pre_instance_id =pre_i =pre_optimal_distance=0
-        for instance_id in range(len(train_data)):
-            instance_data = train_data[instance_id]
-            
-            for run_id in range(repeat_runs):
-                self.completed_tasks += 1
-                
-                # Calculate local progress for this instance/run combination
-                total_instance_runs = len(train_data) * repeat_runs
-                current_instance_run = instance_id * repeat_runs + run_id + 1
-                local_progress = (current_instance_run / total_instance_runs) * 100
-                
-                # Update external progress if callback available
-                if hasattr(self, 'progress_callback') and self.progress_callback:
-                    self.progress_callback(
-                        self.completed_tasks, 
-                        self.total_tasks, 
-                        f"Instance {instance_id + 1}/{len(train_data)}, Run {run_id + 1}/{repeat_runs}"
-                    )
-                
-                self.logger.log_experiment_progress(
-                    algorithm, city_num, "per_instance", 
-                    instance_id + 1, len(train_data), run_id + 1, repeat_runs,
-                    self.completed_tasks, self.total_tasks
-                )
-                self.logger.logger.info(f"Local Progress: {current_instance_run}/{total_instance_runs} ({local_progress:.1f}%)")
-                
-                # Create environment and agent
-                env = self.dataset_loader.create_env_from_instance(
-                    instance_data, state_components
-                )
-                
-                agent = self.create_agent(
-                    algorithm, state_dim, city_num, state_components
-                )
-                
-                # Create model manager
-                model_dir = os.path.join(
-                    self.logger.get_experiment_dir(), "models", 
-                    algorithm, f"{city_num}cities", state_type, "per_instance",
-                    f"instance_{instance_id}_run_{run_id}"
-                )
-                model_manager = ModelManager(model_dir, keep_recent=10)
-                
-                # Train on single instance
-                if pre_instance_id==instance_id  and pre_optimal_distance !=env.optimal_distance:
-                    print()
-                self._train_agent(
-                    agent, env, episodes_training, algorithm, 
-                    city_num, "per_instance", instance_id, run_id, 
-                    state_type, "train", model_manager, 
-                    save_model_every, evaluate_every,state_components
-                )
-                pre_optimal_distance=env.optimal_distance
-                pre_i= run_id
-                pre_instance_id = instance_id
-        
-                # Zero-shot testing on test instances
-                for test_instance_id in range(len(test_data)):
-                    test_instance_data = test_data[test_instance_id]
-                    self.completed_tasks += 1
-                    
-                    test_progress = ((test_instance_id + 1) / len(test_data)) * 100
-                    self.logger.logger.info(f"Testing instance {test_instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
-                    
-                    # Log testing progress
-                    self.logger.log_experiment_progress(
-                        algorithm, city_num, "per_instance_testing",
-                        test_instance_id + 1, len(test_data), 1, 1,
-                        self.completed_tasks, self.total_tasks
-                    )
-                    
-                    # Create fresh environment and agent for zero-shot test
-                    env = self.dataset_loader.create_env_from_instance(
-                        test_instance_data, state_components
-                    )
-
-                    # Zero-shot test (single episode with trained agent using best model)
-                    self._zero_shot_test(
-                        agent, env, algorithm, city_num, "per_instance",
-                        test_instance_id, run_id, state_type, "test", model_manager
-                    )
+        return self._run_unified_training(
+            algorithm, city_num, state_type, state_components, state_dim,
+            train_data, test_data, repeat_runs, episodes_training,
+            save_model_every, evaluate_every, "per_instance"
+        )
 
     def _run_cross_instance_training(self, algorithm: str, city_num: int, state_type: str,
                                    state_components: List[str], state_dim: int, train_data: List,
                                    test_data: List, repeat_runs: int, episodes_training: int,
                                    save_model_every: int, evaluate_every: int):
         """Handle cross-instance training logic."""
-        for run_id in range(repeat_runs):
-            self.completed_tasks += 1
-            
-            self.logger.log_experiment_progress(
-                algorithm, city_num, "cross_instance", 
-                1, len(train_data), run_id + 1, repeat_runs,
-                self.completed_tasks, self.total_tasks
-            )
-            
-            # Create agent once for all training instances
-            agent = self.create_agent(
-                algorithm, state_dim, city_num, state_components
-            )
-            
-            # Create model manager
-            model_dir = os.path.join(
-                self.logger.get_experiment_dir(), "models", 
-                algorithm, f"{city_num}cities", state_type, "cross_instance",
-                f"run_{run_id}"
-            )
-            model_manager = ModelManager(model_dir, keep_recent=10)
-            
-            # Cross-instance training
-            self._train_agent(
-                agent, train_data, episodes_training,
-                algorithm, city_num, "cross_instance", 0, run_id, 
-                state_type, "train", model_manager,
-                save_model_every, evaluate_every, state_components
-            )
-            
-            # Test on test instances
-            for instance_id in range(len(test_data)):
-                self.completed_tasks += 1
-                
-                test_progress = ((instance_id + 1) / len(test_data)) * 100
-                self.logger.logger.info(f"Testing instance {instance_id + 1}/{len(test_data)} ({test_progress:.1f}%)")
-                
-                # Log testing progress
-                self.logger.log_experiment_progress(
-                    algorithm, city_num, "cross_instance_testing",
-                    instance_id + 1, len(test_data), 1, 1,
-                    self.completed_tasks, self.total_tasks
-                )
-                
-                instance_data = test_data[instance_id]
-                
-                env = self.dataset_loader.create_env_from_instance(
-                    instance_data, state_components
-                )
-                
-                # Use _zero_shot_test to ensure detailed step logging to CSV
-                self._zero_shot_test(
-                    agent, env, algorithm, city_num, "cross_instance", 
-                    instance_id, run_id, state_type, "test", model_manager
-                )
+        return self._run_unified_training(
+            algorithm, city_num, state_type, state_components, state_dim,
+            train_data, test_data, repeat_runs, episodes_training,
+            save_model_every, evaluate_every, "cross_instance"
+        )
 
     def run_per_instance_mode(self):
         """Run per-instance training mode."""

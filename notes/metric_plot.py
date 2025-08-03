@@ -195,85 +195,29 @@ full_states = ["current_city_onehot", "visited_mask", "order_embedding", "distan
 class TSPAdvancedAblationAnalyzer:
     """高级TSP消融实验分析器 - 博士水准"""
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df
+    def __init__(self):
+
         self.results = {}
 
-    # def calculate_performance_metrics(self) -> pd.DataFrame:
-    #     """计算核心性能指标"""
-    #     print("计算性能指标...")
-    #     episode_data = self.df[self.df['done'] == 1].copy()
-    #     episode_data['optimality_gap'] = (
-    #             (episode_data['current_distance'] - episode_data['optimal_distance']) /
-    #             episode_data['optimal_distance'] * 100
-    #     )
-    #     episode_data.to_csv('t3.csv',index=False)
-    #     # 第一次分组聚合，并设置列名前缀为 "instance_"
-    #     instance_metrics = episode_data.groupby(
-    #         ['algorithm', 'city_num', 'mode', 'state_type', 'train_test', 'instance_id']).agg({
-    #         'optimality_gap': ['min'],  # ['mean', 'std', 'max', 'min', 'count'],
-    #         'total_reward': ['max']  # ['mean', 'std', 'max', 'min', 'count'],
-    #     }).round(4)
-    #
-    #
-    #     # 重构列名，将多级列名展平并添加 "instance_" 前缀
-    #     instance_metrics.columns = ['instance_' + '_'.join(col).strip() for col in instance_metrics.columns.values]
-    #
-    #     # 重置索引，使分组列变为普通列
-    #     instance_metrics = instance_metrics.reset_index()
-    #
-    #     # 第二次分组聚合
-    #     # 首先获取所有以 "instance_" 开头的列名
-    #     instance_columns = [col for col in instance_metrics.columns if col.startswith('instance_') and col != 'instance_id']
-    #
-    #     # 构建第二次聚合的字典
-    #     agg_dict = {}
-    #     for col in instance_columns:
-    #         agg_dict[col] = ['mean', 'std', 'max', 'min', 'count']
-    #
-    #     # 进行第二次分组聚合
-    #     metrics = instance_metrics.groupby(['algorithm', 'city_num', 'mode', 'state_type', 'train_test']).agg(
-    #         agg_dict).round(4)
-    #     metrics = metrics.fillna(0)
-    #
-    #     # 重构最终列名
-    #     final_columns = []
-    #     for col in metrics.columns.values:
-    #         if col[0].startswith('instance_optimality_gap'):
-    #             # 从 instance_optimality_gap_xxx 提取后面的部分，然后与聚合函数组合
-    #             original_metric = col[0].replace('instance_', '').split('_')[0] + '_' + \
-    #                               col[0].replace('instance_', '').split('_')[1]  # optimality_gap
-    #             final_columns.append(f"optimality_gap_{col[1]}")
-    #         elif col[0].startswith('instance_total_reward'):
-    #             # 从 instance_total_reward_xxx 提取后面的部分，然后与聚合函数组合
-    #             final_columns.append(f"total_reward_{col[1]}")
-    #         else:
-    #             # 其他情况保持原样或根据需要处理
-    #             final_columns.append('_'.join(col).strip())
-    #
-    #     metrics.columns = final_columns
-    #
-    #     # 重置索引
-    #     metrics = metrics.reset_index()
-    #
-    #
-    #     # metrics = metrics.compute()
-    #
-    #     return metrics
-    def calculate_performance_metrics(self) -> pd.DataFrame:
+    def calculate_performance_metrics(self, df=None) -> pd.DataFrame:
         """计算核心性能指标"""
         print("计算性能指标...")
-        episode_data = self.df[self.df['done'] == 1].copy()
-        episode_data['optimality_gap'] = (
-                (episode_data['current_distance'] - episode_data['optimal_distance']) /
-                episode_data['optimal_distance'] * 100
-        )
-        episode_data.to_csv('t3.csv',index=False)
+        # todo
+        # episode_data = df[df['done'] == 1].copy()
+        # episode_data['optimality_gap'] = (
+        #         (episode_data['current_distance'] - episode_data['optimal_distance']) /
+        #         episode_data['optimal_distance'] * 100
+        # )
+        # episode_data.to_csv('t3.csv', index=False)
+
+
+        episode_data= pd.read_csv('t3.csv')
+
         # 第一次分组聚合，并设置列名前缀为 "instance_"
         metrics = episode_data.groupby(
             ['algorithm', 'city_num', 'mode', 'state_type', 'train_test', 'instance_id']).agg({
-            'optimality_gap': ['mean', 'std', 'max', 'min', 'count'],
-            'total_reward':  ['mean', 'std', 'max', 'min', 'count'],
+            'optimality_gap': ['mean', 'std', 'max', 'min', 'count',list],
+            'total_reward':  ['mean', 'std', 'max', 'min', 'count',list],
         }).round(4)
         metrics.columns = ['_'.join(col).strip() for col in metrics.columns.values]
 
@@ -373,8 +317,8 @@ class TSPAdvancedAblationAnalyzer:
     def calculate_component_contributions(self,metrics) -> pd.DataFrame:
         """高级组件贡献度分析 - 基于消融实验理论"""
         print("执行高级组件贡献度分析...")
-        if  metrics is not None:
-            metrics = self.calculate_performance_metrics()
+        if  metrics is None:
+            return None
         contributions = []
 
         for algorithm in metrics['algorithm'].unique():
@@ -624,7 +568,7 @@ class TSPAdvancedAblationAnalyzer:
             actual_pathway_perf.append(best_combination['performance'])
             actual_pathway_components.append(best_combination['components'])
 
-        # 构建最坏路径（最大性能退化）
+            # 构建最坏路径（最大性能退化）
             worst_combination = max(available_pathways[num_removed],
                                     key=lambda x: x['degradation'])
             worst_pathway_perf.append(worst_combination['performance'])
@@ -636,7 +580,7 @@ class TSPAdvancedAblationAnalyzer:
             'pathway_performance': actual_pathway_perf,
             'total_degradation': get_degradation(actual_pathway_perf[-1], actual_pathway_perf[0]) if len(
                 actual_pathway_perf) > 1 else 0,
-            'degradation_rate': [get_degradation( actual_pathway_perf[i],actual_pathway_perf[i + 1])
+            'degradation_rate': [get_degradation( actual_pathway_perf[i+1],actual_pathway_perf[i])
                                  for i in range(len(actual_pathway_perf) - 1)],
             'pathway_components': actual_pathway_components,
             'pathway_description': f'Optimal path (minimal degradation, {performance_better_when} is better)'
@@ -647,7 +591,7 @@ class TSPAdvancedAblationAnalyzer:
             'pathway_performance': worst_pathway_perf,
             'total_degradation': get_degradation(worst_pathway_perf[-1], worst_pathway_perf[0]) if len(
                 worst_pathway_perf) > 1 else 0,
-            'degradation_rate': [get_degradation( worst_pathway_perf[i],worst_pathway_perf[i + 1])
+            'degradation_rate': [get_degradation( worst_pathway_perf[i+1],worst_pathway_perf[i])
                                  for i in range(len(worst_pathway_perf) - 1)],
             'pathway_components': worst_pathway_components,
             'pathway_description': f'Worst case path (maximal degradation, {performance_better_when} is better)'
@@ -1533,7 +1477,7 @@ class TSPAdvancedVisualizationSuite:
             ax.plot(x_values, y_values, 'o-', linewidth=3, markersize=8,
                     color=line_color, label='Mean Degradation')
 
-            # yerr=y_errors：y轴方向的误差范围（可以是标量或数组）。
+            # std   -> y_err=y_errors：y轴方向的误差范围（可以是标量或数组）。
             # capsize=5：误差棒两端横杠的长度。
             # capthick=2：误差棒横杠的粗细。
             # alpha=0.7：透明度，值越小越透明
@@ -2040,22 +1984,18 @@ def generate_performance_files(input_files):
                 'state_values',
             ]
             
-            df = pd.read_csv(f, usecols=columns)
-            print(f"完成：读取csv {f}，数据形状: {df.shape}")
+            # df = pd.read_csv(f, usecols=columns)
+            # print(f"完成：读取csv {f}，数据形状: {df.shape}")
+            df=None
             
-            analyzer = TSPAdvancedAblationAnalyzer(df)
-            
-            # 生成唯一的文件名前缀
-            # file_basename = f.replace('.csv', '').replace('/', '_').replace('\\', '_')
-            
-            # 计算性能指标
+            analyzer = TSPAdvancedAblationAnalyzer()
+
             print("计算性能指标...")
-            performance_metrics = analyzer.calculate_performance_metrics()
+            performance_metrics = analyzer.calculate_performance_metrics(df)
             perf_filename = f'{i}_performance_metrics.csv'
             performance_metrics.to_csv(perf_filename, index=False)
             print(f"性能指标已保存到: {perf_filename}")
             
-            # 计算高级组件贡献度
             print("计算高级组件贡献度...")
             contributions = analyzer.calculate_component_contributions(performance_metrics)
             contrib_filename = f'{i}_advanced_component_contributions.csv'
@@ -2063,7 +2003,6 @@ def generate_performance_files(input_files):
                 contributions.to_csv(contrib_filename, index=False)
                 print(f"高级组件贡献度已保存到: {contrib_filename}")
             
-            # 计算消融路径分析
             print("计算消融路径分析...")
             pathway_analysis = analyzer.calculate_ablation_pathway_analysis(
                 performance_better_when='smaller', metrics=performance_metrics)
@@ -2072,7 +2011,6 @@ def generate_performance_files(input_files):
                 pathway_analysis.to_csv(pathway_filename, index=False)
                 print(f"消融路径分析已保存到: {pathway_filename}")
             
-            # 记录生成的文件
             generated_files[f] = {
                 'performance_metrics': perf_filename,
                 'contributions': contrib_filename,
@@ -2126,37 +2064,46 @@ def generate_visualization_plots(performance_files_dict):
             continue
 
 
-if __name__ == "__main__":
+def run():
     try:
-        files = [
-            '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_cross_instance_20250730_000205/experiment_data_20250730_000205.csv',
-                 '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250730_000205/experiment_data_20250730_000205.csv']
-        print(f"待处理文件: {files}")
-        
-        # 步骤1: 生成性能分析文件
-        print("=" * 60)
-        print("步骤1: 生成性能分析文件")
-        print("=" * 60)
-        generated_files = generate_performance_files(files)
 
-        print(f"共处理了 {len(generated_files)} 个文件")
-        for input_file, file_paths in generated_files.items():
-            print(f"文件 {input_file} 生成的文件:")
-            for file_type, file_path in file_paths.items():
-                print(f"  - {file_type}: {file_path}")
-        # generated_files={}
-        # generated_files['2.csv'] = {
-        #     'performance_metrics': 'performance_metrics.csv',
-        #     'contributions': 'advanced_component_contributions.csv',
-        #     'pathway_analysis': 'ablation_pathway_analysis.csv'
-        # }
-        
+        is_generate = True
+        # 步骤1: 生成性能分析文件
+        if is_generate:
+            files = [
+                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_cross_instance_20250730_000205/experiment_data_20250730_000205.csv',
+                '/home/y/workplace/mac-bk/git_code/clean/tsp-paper/results/tsp_rl_ablation_DQN_per_instance_20250730_000205/experiment_data_20250730_000205.csv']
+            print(f"待处理文件: {files}")
+
+
+            print("=" * 60)
+            print("步骤1: 生成性能分析文件")
+            print("=" * 60)
+            generated_files = generate_performance_files(files)
+
+            print(f"共处理了 {len(generated_files)} 个文件")
+            for input_file, file_paths in generated_files.items():
+                print(f"文件 {input_file} 生成的文件:")
+                for file_type, file_path in file_paths.items():
+                    print(f"  - {file_type}: {file_path}")
+        else:
+            generated_files = {
+                'cross.csv':
+                    {'performance_metrics': '0_performance_metrics.csv',
+                     'contributions': '0_advanced_component_contributions.csv',
+                     'pathway_analysis': '0_ablation_pathway_analysis.csv'},
+                # 'pre.csv':
+                #     {'performance_metrics': '1_performance_metrics.csv',
+                #      'contributions': '1_advanced_component_contributions.csv',
+                #      'pathway_analysis': '1_ablation_pathway_analysis.csv'},
+            }
+
         # 步骤2: 生成可视化图表
         print("\n" + "=" * 60)
         print("步骤2: 生成可视化图表")
         print("=" * 60)
         generate_visualization_plots(generated_files)
-        
+
         print("\n" + "=" * 60)
         print("所有处理完成!")
         print("=" * 60)
@@ -2164,5 +2111,8 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"主程序执行出错: {e}")
         print(f"详细错误信息: {traceback.format_exc()}")
+
+if __name__ == "__main__":
+    run()
 
 
