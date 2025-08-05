@@ -403,6 +403,7 @@ class ExperimentRunner:
                 state_values = state_components
                 
                 # Log step to CSV for both modes
+                # 当前state，根据state选择a，对应reward
                 self.logger.log_training_step(
                     algorithm, city_num, mode, current_instance_id, run_id, state_type,
                     train_test, episode, step, action, state, done, reward,
